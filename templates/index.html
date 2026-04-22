@@ -1,0 +1,1484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Emby Dupe Detective</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Crimson+Pro:ital,wght@0,300;0,400;0,600;1,300;1,400&display=swap" rel="stylesheet">
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script src="{{ url_for('static', filename='i18n.js') }}"></script>
+</head>
+<body>
+
+<!-- Loading overlay -->
+<div id="loading-overlay">
+  <div class="loading-spinner"></div>
+  <div class="loading-text" id="loading-text" data-i18n="loading_scanning">Scanning library…</div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<!-- Header -->
+<header class="header">
+  <div class="logo">
+    <span class="logo-main">DUPE DETECTIVE</span>
+    <span class="logo-sub">for Emby</span>
+  </div>
+  <div class="header-status" id="header-status">
+    <div class="status-dot" id="status-dot"></div>
+    <span id="status-text" data-i18n="status_not_connected">Not connected</span>
+  </div>
+  <div class="header-right">
+    <div class="header-actions">
+      <button class="btn-header" id="btn-header-setup" onclick="openSetupModal()" data-i18n="header_setup">Setup</button>
+      <button class="btn-header" onclick="openScoringConfig()" data-i18n="header_scoring">⚖ Scoring</button>
+      <button class="btn-header" onclick="openExportConfig()" data-i18n="header_export">↧ Export</button>
+    </div>
+    <div class="lang-selector">
+      <select id="lang-select" onchange="setLanguage(this.value)">
+        <option value="en">EN</option>
+        <option value="pl">PL</option>
+        <option value="de">DE</option>
+      </select>
+    </div>
+  </div>
+</header>
+
+<!-- ═══════════════════════════════════════════════
+     SECTION 1 — FIRST RUN WELCOME
+════════════════════════════════════════════════════ -->
+<div id="section-config" class="container" style="display:none">
+  <div class="page-intro first-run-intro">
+    <div class="page-eyebrow" data-i18n="first_run_eyebrow">First Run — Welcome</div>
+    <h1 class="page-title"><span data-i18n="server_title">Server</span><br><span class="amber" data-i18n="configuration_title">Configuration</span></h1>
+    <p class="page-desc" data-i18n="first_run_desc">Connect the detective to your Emby server to start finding duplicate files.</p>
+    <button class="btn btn-primary" onclick="openSetupModal()" data-i18n="configure_server_btn">⚙ Configure Server</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════
+     SECTION MAIN — shown after configuration
+════════════════════════════════════════════════════ -->
+<div id="section-main" class="container" style="display:none">
+  <div class="page-intro main-intro">
+    <div class="page-eyebrow" data-i18n="main_eyebrow">Library Scanner</div>
+    <h1 class="page-title"><span data-i18n="main_title">Ready to</span><br><span class="amber" data-i18n="main_title_accent">Detect</span></h1>
+    <p class="page-desc" data-i18n="main_desc">Scan your Emby library to find duplicate movies or TV series episodes.</p>
+    <button class="btn btn-primary btn-scan" id="btn-scan" onclick="openScanTypeModal()">
+      ▶&nbsp;&nbsp;<span data-i18n="scan_for_duplicates">Scan for Duplicates</span>
+    </button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════
+     SECTION 2 — RESULTS
+════════════════════════════════════════════════════ -->
+<div id="section-results" class="container" style="display:none">
+
+  <div class="page-intro" style="padding-bottom: 2rem;">
+    <div class="page-eyebrow" data-i18n="step_03_review">Step 03 — Review</div>
+    <h2 class="page-title"><span data-i18n="duplicate_title">Duplicate</span><br><span class="amber" data-i18n="report_title">Report</span></h2>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-bar" id="stats-bar">
+    <div class="stat-block">
+      <span class="stat-num" id="stat-total">—</span>
+      <span class="stat-label" id="stat-total-label" data-i18n="stat_total_items">Total Items</span>
+    </div>
+    <div class="stat-block">
+      <span class="stat-num" id="stat-groups">—</span>
+      <span class="stat-label" data-i18n="stat_duplicate_groups">Duplicate Groups</span>
+    </div>
+    <div class="stat-block">
+      <span class="stat-num" id="stat-files">—</span>
+      <span class="stat-label" data-i18n="stat_affected_files">Affected Files</span>
+    </div>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="results-toolbar">
+    <div class="toolbar-left">
+      <div class="search-wrap">
+        <span class="search-icon">⌕</span>
+        <input type="text" id="inp-search" data-i18n-placeholder="filter_by_title" placeholder="Filter by title..." oninput="filterResults()">
+      </div>
+      <div class="select-count">
+          <span id="selected-count">0</span> <span data-i18n="paths_selected">paths selected</span>
+          <span id="selected-size-wrap" style="opacity: 0.7; margin-left: 0.4rem;">
+            (<span id="selected-size" style="color:var(--primary); font-weight:500;">0 B</span>)
+    </span>
+      </div>
+    </div>
+    <div style="display:flex; gap: 0.75rem; flex-wrap: wrap;">
+      <button class="btn btn-ghost" onclick="expandAllGroups()" data-i18n="expand_all">Expand All</button>
+      <button class="btn btn-ghost" onclick="collapseAllGroups()" data-i18n="collapse_all">Collapse All</button>
+      <button class="btn btn-ghost" onclick="selectAllVisible()" data-i18n="select_all_visible">Select All Visible</button>
+      <button class="btn btn-ghost" onclick="clearSelection()" data-i18n="clear_selection">Clear Selection</button>
+      <button class="btn btn-danger" id="btn-export" onclick="exportPaths()" disabled data-i18n="export_selected_paths">Export Selected Paths</button>
+      <button class="btn btn-danger" id="btn-delete" onclick="openDeleteConfirm()" disabled style="background:rgba(180,30,30,0.18); border-color:var(--red)" data-i18n="delete_selected">Delete Selected from Emby</button>
+    </div>
+  </div>
+
+  <!-- Results list -->
+  <div id="results-list"></div>
+
+  <!-- Re-scan -->
+  <div style="text-align:center; padding: 2rem 0 3rem;">
+    <button class="btn btn-ghost" onclick="openScanTypeModal()">↺&nbsp;&nbsp;<span data-i18n="rescan_library">Re-scan Library</span></button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════
+     SETUP MODAL (server configuration)
+════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="setup-modal" onclick="onSetupModalOverlayClick(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" data-i18n="server_setup_modal_title">SERVER SETUP</div>
+      <button class="modal-close" onclick="closeSetupModal()">✕</button>
+    </div>
+    <div class="modal-body">
+
+      <div class="form-grid">
+        <div>
+          <label for="inp-host" data-i18n="server_address">Server Address</label>
+          <input type="text" id="inp-host" data-i18n-placeholder="server_address_placeholder" placeholder="192.168.1.100  or  emby.example.com">
+        </div>
+        <div>
+          <label for="inp-port" data-i18n="port">Port</label>
+          <input type="text" id="inp-port" placeholder="8096" value="8096">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <label for="inp-apikey" data-i18n="api_key">API Key</label>
+        <input type="password" id="inp-apikey" data-i18n-placeholder="api_key_placeholder" placeholder="Paste your Emby API key…">
+      </div>
+
+      <div id="test-result" style="font-family: var(--mono); font-size: 0.75rem; color: var(--text-muted); min-height: 1.2em;"></div>
+
+      <div class="connection-info" style="margin-top: 1rem;">
+        <strong data-i18n="how_to_get_api_key">How to get your API key:</strong><br>
+        <span data-i18n="api_key_instructions">Emby Dashboard → Advanced → API Keys → + New API Key</span>
+      </div>
+
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="btn-test" onclick="testConnection()" data-i18n="test_connection">Test Connection</button>
+      <button class="btn btn-primary" id="btn-save" onclick="saveConfig()" data-i18n="save_configuration">Save Configuration</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════
+     SCAN TYPE MODAL
+════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="scan-type-modal" onclick="onScanTypeModalOverlayClick(event)">
+  <div class="modal scan-type-modal">
+    <div class="modal-header">
+      <div class="modal-title" data-i18n="scan_library_title">SCAN LIBRARY</div>
+      <button class="modal-close" onclick="closeScanTypeModal()">✕</button>
+    </div>
+    <div class="modal-body" style="text-align: center; padding: 2rem 1.75rem;">
+      <p style="font-family: var(--serif); font-style: italic; color: var(--text-muted); margin-bottom: 1.75rem; font-size: 1.05rem;" data-i18n="select_media_desc">
+        Select what to scan for duplicates.
+      </p>
+      <div class="media-type-selector">
+        <button class="btn media-type-btn active" id="btn-type-movies" onclick="selectMediaType('movies')" data-i18n="movies">Movies</button>
+        <button class="btn media-type-btn" id="btn-type-series" onclick="selectMediaType('series')" data-i18n="tv_series">TV Series</button>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeScanTypeModal()" data-i18n="cancel">Cancel</button>
+      <button class="btn btn-primary" onclick="startScanFromModal()">▶&nbsp;<span data-i18n="scan_start_btn">Scan</span></button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════
+     DELETE CONFIRM MODAL
+════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="delete-confirm-modal" onclick="onDeleteModalOverlayClick(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" style="color:var(--red)" data-i18n="confirm_delete_title">CONFIRM DELETE</div>
+      <button class="modal-close" onclick="closeDeleteConfirm()">✕</button>
+    </div>
+    <div class="modal-body">
+
+      <div class="delete-warning">
+        <span class="delete-warning-icon">⚠</span>
+        <span data-i18n="delete_warning">The following items will be permanently removed from Emby. This action cannot be undone. Optionally, the source files can also be deleted from disk.</span>
+      </div>
+
+      <div class="delete-list" id="delete-list"></div>
+
+      <label class="checkbox-row danger" for="del-files">
+        <input type="checkbox" id="del-files">
+        <span data-i18n="delete_files_from_disk">Also delete source files from disk</span>
+      </label>
+
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeDeleteConfirm()" data-i18n="cancel">Cancel</button>
+      <button class="btn btn-danger" id="btn-confirm-delete" onclick="confirmDelete()" data-i18n="delete">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════
+     EXPORT CONFIG MODAL (tabbed: Movies / TV Series)
+════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="export-config-modal" onclick="onExportModalOverlayClick(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" data-i18n="export_settings_title">EXPORT SETTINGS</div>
+      <button class="modal-close" onclick="closeExportConfig()">✕</button>
+    </div>
+    <div class="modal-tabs">
+      <button class="modal-tab active" id="export-tab-btn-movies" onclick="switchExportTab('movies')" data-i18n="movies">Movies</button>
+      <button class="modal-tab" id="export-tab-btn-series" onclick="switchExportTab('series')" data-i18n="tv_series">TV Series</button>
+    </div>
+    <div class="modal-body">
+
+      <!-- Movies tab -->
+      <div id="export-tab-content-movies">
+        <div class="form-row">
+          <label for="ecfg-prefix" data-i18n="prefix">Prefix</label>
+          <input type="text" id="ecfg-prefix" placeholder="e.g.  rm -rf  or  /mnt/backup" oninput="updateExportPreview()">
+        </div>
+        <div class="form-row">
+          <label for="ecfg-suffix" data-i18n="suffix">Suffix</label>
+          <input type="text" id="ecfg-suffix" placeholder='e.g.  " (copy)"  or  .bak' oninput="updateExportPreview()">
+        </div>
+        <label class="checkbox-row" for="ecfg-strip">
+          <input type="checkbox" id="ecfg-strip" onchange="updateExportPreview()">
+          <span data-i18n="strip_filename">Strip filename — export directory path only</span>
+        </label>
+      </div>
+
+      <!-- TV Series tab -->
+      <div id="export-tab-content-series" style="display:none">
+        <div class="form-row">
+          <label for="secfg-prefix" data-i18n="prefix">Prefix</label>
+          <input type="text" id="secfg-prefix" placeholder="e.g.  rm -rf  or  /mnt/backup" oninput="updateExportPreview()">
+        </div>
+        <div class="form-row">
+          <label for="secfg-suffix" data-i18n="suffix">Suffix</label>
+          <input type="text" id="secfg-suffix" placeholder='e.g.  " (copy)"  or  .bak' oninput="updateExportPreview()">
+        </div>
+        <label class="checkbox-row" for="secfg-strip">
+          <input type="checkbox" id="secfg-strip" onchange="updateExportPreview()">
+          <span data-i18n="strip_filename">Strip filename — export directory path only</span>
+        </label>
+      </div>
+
+      <!-- Shared: Path Mapping -->
+      <div class="modal-section-title" data-i18n="path_mapping_title">Path Mapping</div>
+      <div class="modal-section-hint">
+        <span data-i18n="path_mapping_hint">Replaces the Emby path prefix with a local one during export.</span><br>
+        <span data-i18n="path_mapping_hint2">The first matching rule is applied. Unmapped paths are exported as-is.</span>
+      </div>
+
+      <div id="ecfg-mappings"></div>
+
+      <button class="btn btn-ghost" style="margin-top:0.25rem; font-size:0.78rem;" onclick="addMappingRow()" data-i18n="add_mapping">+ Add Mapping</button>
+
+      <div class="export-preview">
+        <div class="export-preview-label" data-i18n="preview_label">Preview</div>
+        <div class="export-preview-path" id="ecfg-preview">—</div>
+      </div>
+
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeExportConfig()" data-i18n="cancel">Cancel</button>
+      <button class="btn btn-primary" onclick="saveExportConfig()" data-i18n="apply">Apply</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════
+     SCORING CONFIG MODAL
+════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="scoring-config-modal" onclick="onScoringModalOverlayClick(event)">
+  <div class="modal scoring-modal">
+    <div class="modal-header">
+      <div class="modal-title" data-i18n="scoring_settings_title">SCORING SETTINGS</div>
+      <button class="modal-close" onclick="closeScoringConfig()">✕</button>
+    </div>
+    <div class="modal-body">
+
+      <div class="scoring-intro" data-i18n="scoring_intro">
+        Each duplicate file is scored based on its media properties. Files are sorted by score (highest = best quality).
+        Configure the weights below to control how quality is determined.
+      </div>
+
+      <label class="checkbox-row" for="scfg-auto-select">
+        <input type="checkbox" id="scfg-auto-select">
+        <span data-i18n="auto_select_losers">Auto-select all losers — automatically check all duplicates except the winner for deletion/export</span>
+      </label>
+
+      <label class="checkbox-row" for="scfg-score-filesize">
+        <input type="checkbox" id="scfg-score-filesize" checked>
+        <span data-i18n="include_file_size">Include file size in scoring</span>
+      </label>
+
+      <div class="modal-section-title" data-i18n="video_codec_scores_title">Video Codec Scores</div>
+      <div class="modal-section-hint" data-i18n="video_codec_hint">Score added when the file uses this video codec.</div>
+      <div class="score-table" id="scfg-video-codecs"></div>
+
+      <div class="modal-section-title" data-i18n="audio_codec_scores_title">Audio Codec Scores</div>
+      <div class="modal-section-hint" data-i18n="audio_codec_hint">Score added when the file uses this audio codec.</div>
+      <div class="score-table" id="scfg-audio-codecs"></div>
+
+      <div class="modal-section-title" data-i18n="video_resolution_scores_title">Video Resolution Scores</div>
+      <div class="modal-section-hint" data-i18n="video_resolution_hint">Score added based on video resolution category.</div>
+      <div class="score-table" id="scfg-resolutions"></div>
+
+      <div class="modal-section-title" data-i18n="filename_pattern_scores_title">Filename Pattern Scores</div>
+      <div class="modal-section-hint" data-i18n="filename_pattern_hint">Score added when the filename matches a glob pattern (e.g., *Remux*, *.avi). Matched against the filename only, not the full path.</div>
+      <div id="scfg-filename-patterns"></div>
+      <button class="btn btn-ghost" style="margin-top:0.25rem; font-size:0.78rem;" onclick="addFilenamePatternRow()" data-i18n="add_pattern">+ Add Pattern</button>
+
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="resetScoringDefaults()" data-i18n="reset_defaults">Reset Defaults</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-ghost" onclick="closeScoringConfig()" data-i18n="cancel">Cancel</button>
+      <button class="btn btn-primary" onclick="saveScoringConfig()" data-i18n="apply">Apply</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── STATE ───────────────────────────────────────────
+let allDuplicates = [];
+let selectedPaths = new Set();
+let selectedItemIds = new Map();
+let autoSelectLosers = false;
+let scoringConfig = null;
+let currentMediaType = 'movies';
+let currentExportTab = 'movies';
+let seriesExportConfig = { prefix: '', suffix: '', stripFilename: false };
+
+// ─── INIT ─────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', async () => {
+  applyTranslations();
+  await loadConfig();
+  await loadExportConfig();
+  await loadSeriesExportConfig();
+  await loadScoringConfig();
+});
+
+// ─── SECTION VISIBILITY ───────────────────────────────
+function showMainSection() {
+  document.getElementById('section-config').style.display = 'none';
+  document.getElementById('section-main').style.display = 'block';
+}
+
+function showConfigSection() {
+  document.getElementById('section-config').style.display = 'block';
+  document.getElementById('section-main').style.display = 'none';
+}
+
+// ─── SETUP MODAL ──────────────────────────────────────
+function openSetupModal() {
+  document.getElementById('setup-modal').classList.add('open');
+}
+
+function closeSetupModal() {
+  document.getElementById('setup-modal').classList.remove('open');
+}
+
+function onSetupModalOverlayClick(e) {
+  if (e.target === e.currentTarget) closeSetupModal();
+}
+
+// ─── MEDIA TYPE ───────────────────────────────────────
+function selectMediaType(type) {
+  currentMediaType = type;
+  document.getElementById('btn-type-movies').classList.toggle('active', type === 'movies');
+  document.getElementById('btn-type-series').classList.toggle('active', type === 'series');
+}
+
+// ─── SCAN TYPE MODAL ──────────────────────────────────
+function openScanTypeModal() {
+  document.getElementById('scan-type-modal').classList.add('open');
+}
+
+function closeScanTypeModal() {
+  document.getElementById('scan-type-modal').classList.remove('open');
+}
+
+function onScanTypeModalOverlayClick(e) {
+  if (e.target === e.currentTarget) closeScanTypeModal();
+}
+
+function startScanFromModal() {
+  closeScanTypeModal();
+  startScan();
+}
+
+// ─── LOAD CONFIG ──────────────────────────────────────
+async function loadConfig() {
+  try {
+    const res = await fetch('/api/config');
+    const cfg = await res.json();
+    if (cfg.host) {
+      document.getElementById('inp-host').value = cfg.host;
+      document.getElementById('inp-port').value = cfg.port || '8096';
+      document.getElementById('inp-apikey').value = '';
+      document.getElementById('inp-apikey').placeholder = cfg.api_key_masked || '••••••••••••';
+      showMainSection();
+      if (cfg.api_key_masked) {
+        testConnection();
+      }
+    } else {
+      showConfigSection();
+      openSetupModal();
+    }
+  } catch(e) {
+    showConfigSection();
+    openSetupModal();
+  }
+}
+
+// ─── SAVE CONFIG ──────────────────────────────────────
+async function saveConfig() {
+  const host    = document.getElementById('inp-host').value.trim();
+  const port    = document.getElementById('inp-port').value.trim();
+  const api_key = document.getElementById('inp-apikey').value.trim();
+
+  if (!host) { toast(t('error_server_required'), 'error'); return; }
+  if (!api_key) { toast(t('error_api_key_required'), 'error'); return; }
+
+  const btn = document.getElementById('btn-save');
+  btn.disabled = true;
+  btn.textContent = t('saving');
+
+  try {
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ host, port, api_key })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(t('config_saved'), 'success');
+      document.getElementById('inp-apikey').value = '';
+      document.getElementById('inp-apikey').placeholder = api_key.substring(0,4)+'••••••••'+api_key.slice(-4);
+      closeSetupModal();
+      showMainSection();
+      testConnection();
+    } else {
+      toast(data.error || t('error_scan_failed'), 'error');
+    }
+  } catch(e) {
+    toast(t('network_error'), 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = t('save_configuration');
+  }
+}
+
+// ─── TEST CONNECTION ──────────────────────────────────
+async function testConnection() {
+  const host    = document.getElementById('inp-host').value.trim();
+  const port    = document.getElementById('inp-port').value.trim();
+  const api_key = document.getElementById('inp-apikey').value.trim();
+
+  if (!host) { toast(t('error_enter_server'), 'error'); return; }
+
+  let payload = { host, port, api_key };
+  if (!api_key) {
+    const cfg = await (await fetch('/api/config')).json();
+    payload.api_key = cfg.api_key || '';
+  }
+  if (!payload.api_key) { toast(t('error_enter_api_key'), 'error'); return; }
+
+  const btn = document.getElementById('btn-test');
+  const resultEl = document.getElementById('test-result');
+  btn.disabled = true;
+  btn.textContent = t('testing');
+  resultEl.textContent = '';
+
+  try {
+    const res = await fetch('/api/test', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.ok) {
+      resultEl.style.color = 'var(--green)';
+      resultEl.textContent = `✓ Connected — ${data.server_name} v${data.version}`;
+      setStatus('connected', `${data.server_name}`);
+      toast(tf('connected_toast', {name: data.server_name}), 'success');
+    } else {
+      resultEl.style.color = 'var(--red)';
+      resultEl.textContent = `✗ ${data.error}`;
+      setStatus('error', t('connection_failed'));
+    }
+  } catch(e) {
+    resultEl.style.color = 'var(--red)';
+    resultEl.textContent = '✗ ' + t('network_error');
+    setStatus('error', t('network_error'));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = t('test_connection');
+  }
+}
+
+// ─── SCAN ─────────────────────────────────────────────
+async function startScan() {
+  const overlay = document.getElementById('loading-overlay');
+  const loadingText = document.getElementById('loading-text');
+  overlay.classList.add('show');
+
+  const isSeries = currentMediaType === 'series';
+  const messages = isSeries
+    ? [t('loading_querying_episodes'), t('loading_fetching_sources'), t('loading_comparing_episodes'), t('loading_analysing'), t('loading_almost_there')]
+    : [t('loading_querying_movies'), t('loading_fetching_sources'), t('loading_comparing'), t('loading_analysing'), t('loading_almost_there')];
+  let mi = 0;
+  loadingText.textContent = messages[0];
+  const interval = setInterval(() => {
+    mi = (mi + 1) % messages.length;
+    loadingText.textContent = messages[mi];
+  }, 2200);
+
+  try {
+    const res = await fetch('/api/scan', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ media_type: currentMediaType })
+    });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      toast(data.error || t('error_scan_failed'), 'error');
+      return;
+    }
+
+    allDuplicates = data.duplicates;
+    autoSelectLosers = data.auto_select_losers || false;
+    selectedPaths.clear();
+    selectedItemIds.clear();
+
+    if (autoSelectLosers) {
+      if (isSeries) {
+        for (const series of allDuplicates) {
+          for (const season of series.seasons) {
+            for (const ep of season.episodes) {
+              for (let i = 1; i < ep.files.length; i++) {
+                const f = ep.files[i];
+                if (f.path) {
+                  selectedPaths.add(f.path);
+                  selectedItemIds.set(f.path, {
+                    item_id: f.item_id, source_id: f.source_id,
+                    label: series.series_name + ' S' + (season.season_number ?? '?') + 'E' + (ep.episode ?? '?'), path: f.path,
+                    size: f.size || 0
+                  });
+                }
+              }
+            }
+          }
+        }
+      } else {
+        for (const group of allDuplicates) {
+          for (let i = 1; i < group.files.length; i++) {
+            const f = group.files[i];
+            if (f.path) {
+              selectedPaths.add(f.path);
+              selectedItemIds.set(f.path, {
+                item_id: f.item_id, source_id: f.source_id,
+                label: (f.name || '') + (f.year ? ' (' + f.year + ')' : ''), path: f.path,
+                size: f.size || 0
+              });
+            }
+          }
+        }
+      }
+    }
+
+    document.getElementById('stat-total').textContent  = data.total_items;
+    document.getElementById('stat-total-label').textContent = isSeries ? t('stat_total_episodes') : t('stat_total_movies');
+    document.getElementById('stat-groups').textContent = data.duplicate_groups;
+    document.getElementById('stat-files').textContent  = data.duplicate_files;
+
+    document.getElementById('section-results').style.display = 'block';
+    if (isSeries) {
+      renderSeriesResults(allDuplicates);
+    } else {
+      renderResults(allDuplicates);
+    }
+    updateSelectionUI();
+
+    document.getElementById('section-results').scrollIntoView({ behavior: 'smooth' });
+
+    toast(tf('found_duplicates', {groups: data.duplicate_groups, files: data.duplicate_files}), 'success');
+  } catch(e) {
+    toast(t('error_scan_network'), 'error');
+  } finally {
+    clearInterval(interval);
+    overlay.classList.remove('show');
+  }
+}
+
+// ─── RENDER ───────────────────────────────────────────
+function renderResults(groups) {
+  const container = document.getElementById('results-list');
+  if (!groups.length) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">🎬</div>
+        <div class="empty-title">${escHtml(t('no_duplicates_title'))}</div>
+        <div class="empty-sub">${escHtml(t('no_duplicates_movies'))}</div>
+      </div>`;
+    return;
+  }
+
+  container.innerHTML = groups.map((group, gi) => {
+    const filesHtml = group.files.map((file, fi) => {
+      const id = `chk-${gi}-${fi}`;
+      const checked = selectedPaths.has(file.path) ? 'checked' : '';
+      const selClass = selectedPaths.has(file.path) ? 'selected' : '';
+      const isWinner = fi === 0;
+      const winnerClass = isWinner ? 'winner' : '';
+
+      const audioHtml = file.audio_info && file.audio_info.length
+        ? `<span class="spec-chip audio-chip-compact"><span class="chip-label">audio</span><span class="audio-lines">${file.audio_info.map(a => `<span class="audio-line">${escHtml(a)}</span>`).join('')}</span></span>`
+        : '<span class="spec-chip"><span class="chip-label">audio</span>—</span>';
+
+      const scoreDisplay = file.score != null ? Number(file.score).toLocaleString() : '—';
+
+      return `
+        <div class="file-card ${selClass} ${winnerClass}" id="card-${gi}-${fi}">
+          <input type="checkbox" class="file-checkbox" id="${id}"
+            data-path="${escAttr(file.path)}"
+            data-item-id="${escAttr(file.item_id || '')}"
+            data-source-id="${escAttr(file.source_id || '')}"
+            data-label="${escAttr((file.name || '') + (file.year ? ' (' + file.year + ')' : ''))}"
+            data-size="${file.size || 0}"
+            onchange="togglePath(this, '${gi}-${fi}')"
+            ${checked}>
+          <div class="file-details">
+            <div class="file-path">
+              ${isWinner ? `<span class="winner-badge">${escHtml(t('best_badge'))}</span>` : ''}
+              ${escHtml(file.path || '(no path)')}
+            </div>
+            <div class="file-specs">
+              <span class="spec-chip score-chip">
+                <span class="chip-label">score</span>${scoreDisplay}
+              </span>
+              ${file.runtime_display ? `<span class="spec-chip"><span class="chip-label">length</span>${escHtml(file.runtime_display)}</span>` : ''}
+              <span class="spec-chip highlight">
+                <span class="chip-label">size</span>${escHtml(file.size_display)}
+              </span>
+              <span class="spec-chip highlight">
+                <span class="chip-label">res</span>${escHtml(file.resolution)}
+              </span>
+              <span class="spec-chip">
+                <span class="chip-label">codec</span>${escHtml(file.video_codec)}
+              </span>
+              <span class="spec-chip">
+                <span class="chip-label">video br</span>${escHtml(file.video_bitrate)}
+              </span>
+              ${file.container ? `<span class="spec-chip"><span class="chip-label">fmt</span>${escHtml(file.container)}</span>` : ''}
+              ${audioHtml}
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+
+    const selInGroup = group.files.filter(f => selectedPaths.has(f.path)).length;
+    const hasSel = selInGroup > 0;
+
+    return `
+      <div class="dupe-group ${hasSel ? 'has-selected' : ''}" id="group-${gi}">
+        <div class="group-header" onclick="toggleGroup(${gi})" id="gh-${gi}">
+          <div class="group-title">
+            <span class="group-name">${escHtml(group.name)}</span>
+            ${group.year ? `<span class="group-year">${group.year}</span>` : ''}
+          </div>
+          <div class="group-meta">
+            <span class="badge">${group.files.length} ${escHtml(t('files_label'))}</span>
+            ${selInGroup > 0 ? `<span class="badge" style="border-color:var(--primary-dim);color:var(--primary)">${selInGroup} selected</span>` : ''}
+          </div>
+          <span class="chevron">▾</span>
+        </div>
+        <div class="group-body" id="gb-${gi}">
+          ${filesHtml}
+          <div class="group-select-row">
+            <button class="group-select-all" onclick="selectAllInGroup(${gi}, event)">${escHtml(t('select_all_group'))}</button>
+            <button class="group-select-all" onclick="clearGroupSelection(${gi}, event)">${escHtml(t('clear_group'))}</button>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ─── RENDER SERIES ───────────────────────────────────
+function renderSeriesResults(seriesList) {
+  const container = document.getElementById('results-list');
+  if (!seriesList.length) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">📺</div>
+        <div class="empty-title">${escHtml(t('no_duplicates_title'))}</div>
+        <div class="empty-sub">${escHtml(t('no_duplicates_series'))}</div>
+      </div>`;
+    return;
+  }
+
+  let html = '';
+  let globalIdx = 0;
+
+  for (let si = 0; si < seriesList.length; si++) {
+    const series = seriesList[si];
+    let seriesFileCount = 0;
+    let seriesSelCount = 0;
+    let seasonsHtml = '';
+
+    for (let sei = 0; sei < series.seasons.length; sei++) {
+      const season = series.seasons[sei];
+      let episodesHtml = '';
+
+      for (let ei = 0; ei < season.episodes.length; ei++) {
+        const ep = season.episodes[ei];
+        seriesFileCount += ep.files.length;
+
+        const epLabel = 'S' + (season.season_number != null ? String(season.season_number).padStart(2,'0') : '??') +
+                        'E' + (ep.episode != null ? String(ep.episode).padStart(2,'0') : '??') +
+                        ' — ' + escHtml(ep.name);
+
+        const filesHtml = ep.files.map((file, fi) => {
+          const gi = globalIdx;
+          const id = `chk-${gi}-${fi}`;
+          const checked = selectedPaths.has(file.path) ? 'checked' : '';
+          const selClass = selectedPaths.has(file.path) ? 'selected' : '';
+          const isWinner = fi === 0;
+          const winnerClass = isWinner ? 'winner' : '';
+          if (selectedPaths.has(file.path)) seriesSelCount++;
+
+          const audioHtml = file.audio_info && file.audio_info.length
+            ? `<span class="spec-chip audio-chip-compact"><span class="chip-label">audio</span><span class="audio-lines">${file.audio_info.map(a => `<span class="audio-line">${escHtml(a)}</span>`).join('')}</span></span>`
+            : '<span class="spec-chip"><span class="chip-label">audio</span>—</span>';
+
+          const scoreDisplay = file.score != null ? Number(file.score).toLocaleString() : '—';
+
+          return `
+            <div class="file-card ${selClass} ${winnerClass}" id="card-${gi}-${fi}">
+              <input type="checkbox" class="file-checkbox" id="${id}"
+                data-path="${escAttr(file.path)}"
+                data-item-id="${escAttr(file.item_id || '')}"
+                data-source-id="${escAttr(file.source_id || '')}"
+                data-label="${escAttr(series.series_name + ' ' + epLabel)}"
+                data-size="${file.size || 0}"
+                data-series-idx="${si}"
+                onchange="togglePath(this, '${gi}-${fi}')"
+                ${checked}>
+              <div class="file-details">
+                <div class="file-path">
+                  ${isWinner ? `<span class="winner-badge">${escHtml(t('best_badge'))}</span>` : ''}
+                  ${escHtml(file.path || '(no path)')}
+                </div>
+                <div class="file-specs">
+                  <span class="spec-chip score-chip"><span class="chip-label">score</span>${scoreDisplay}</span>
+                  ${file.runtime_display ? `<span class="spec-chip"><span class="chip-label">length</span>${escHtml(file.runtime_display)}</span>` : ''}
+                  <span class="spec-chip highlight"><span class="chip-label">size</span>${escHtml(file.size_display)}</span>
+                  <span class="spec-chip highlight"><span class="chip-label">res</span>${escHtml(file.resolution)}</span>
+                  <span class="spec-chip"><span class="chip-label">codec</span>${escHtml(file.video_codec)}</span>
+                  <span class="spec-chip"><span class="chip-label">video br</span>${escHtml(file.video_bitrate)}</span>
+                  ${file.container ? `<span class="spec-chip"><span class="chip-label">fmt</span>${escHtml(file.container)}</span>` : ''}
+                  ${audioHtml}
+                </div>
+              </div>
+            </div>`;
+        }).join('');
+
+        episodesHtml += `
+          <div class="episode-group" id="ep-group-${globalIdx}">
+            <div class="episode-header" onclick="toggleGroup(${globalIdx})">
+              <span class="episode-label">${epLabel}</span>
+              <span class="badge">${ep.files.length} ${escHtml(t('files_label'))}</span>
+              <span class="chevron">▾</span>
+            </div>
+            <div class="group-body" id="gb-${globalIdx}">
+              ${filesHtml}
+              <div class="group-select-row">
+                <button class="group-select-all" onclick="selectAllInGroup(${globalIdx}, event)">${escHtml(t('select_all_group'))}</button>
+                <button class="group-select-all" onclick="clearGroupSelection(${globalIdx}, event)">${escHtml(t('clear_group'))}</button>
+              </div>
+            </div>
+          </div>`;
+
+        globalIdx++;
+      }
+
+      const seasonLabel = season.season_number != null
+        ? t('season_label') + ' ' + season.season_number
+        : t('specials_label');
+      seasonsHtml += `
+        <div class="season-block">
+          <div class="season-header">${escHtml(seasonLabel)} <span class="badge">${season.episodes.length} ${escHtml(t('episodes_label'))}</span></div>
+          ${episodesHtml}
+        </div>`;
+    }
+
+    const hasSel = seriesSelCount > 0;
+    html += `
+      <div class="dupe-group series-group ${hasSel ? 'has-selected' : ''}" id="series-${si}" data-gi="${si}">
+        <div class="group-header" onclick="toggleSeriesGroup(${si})" id="sgh-${si}">
+          <div class="group-title">
+            <span class="group-name">${escHtml(series.series_name)}</span>
+          </div>
+          <div class="group-meta">
+            <span class="badge">${seriesFileCount} ${escHtml(t('files_label'))}</span>
+            ${seriesSelCount > 0 ? `<span class="badge" style="border-color:var(--primary-dim);color:var(--primary)">${seriesSelCount} selected</span>` : ''}
+          </div>
+          <span class="chevron">▾</span>
+        </div>
+        <div class="group-body" id="sgb-${si}">
+          ${seasonsHtml}
+        </div>
+      </div>`;
+  }
+
+  container.innerHTML = html;
+}
+
+function toggleSeriesGroup(si) {
+  const header = document.getElementById(`sgh-${si}`);
+  const body = document.getElementById(`sgb-${si}`);
+  header.classList.toggle('open');
+  body.classList.toggle('open');
+}
+
+function toggleGroup(gi) {
+  const header = document.getElementById(`gh-${gi}`);
+  const body   = document.getElementById(`gb-${gi}`);
+  if (header) {
+    header.classList.toggle('open');
+  } else {
+    const epGroup = document.getElementById(`ep-group-${gi}`);
+    if (epGroup) epGroup.querySelector('.episode-header').classList.toggle('open');
+  }
+  body.classList.toggle('open');
+}
+
+function expandAllGroups() {
+  document.querySelectorAll('.dupe-group:not([style*="display: none"]) .group-header').forEach(h => h.classList.add('open'));
+  document.querySelectorAll('.dupe-group:not([style*="display: none"]) .group-body').forEach(b => b.classList.add('open'));
+  document.querySelectorAll('.dupe-group:not([style*="display: none"]) .episode-header').forEach(h => h.classList.add('open'));
+}
+
+function collapseAllGroups() {
+  document.querySelectorAll('.group-header').forEach(h => h.classList.remove('open'));
+  document.querySelectorAll('.group-body').forEach(b => b.classList.remove('open'));
+  document.querySelectorAll('.episode-header').forEach(h => h.classList.remove('open'));
+}
+
+function togglePath(checkbox, cardId) {
+  const path = checkbox.dataset.path;
+  const card = document.getElementById(`card-${cardId}`);
+  if (checkbox.checked) {
+    selectedPaths.add(path);
+    selectedItemIds.set(path, { item_id: checkbox.dataset.itemId, source_id: checkbox.dataset.sourceId, label: checkbox.dataset.label, path: path, size: parseInt(checkbox.dataset.size, 10) || 0 });
+    card.classList.add('selected');
+  } else {
+    selectedPaths.delete(path);
+    selectedItemIds.delete(path);
+    card.classList.remove('selected');
+  }
+  updateSelectionUI();
+  const gi = cardId.split('-')[0];
+  const group = document.getElementById(`group-${gi}`);
+  const anySelected = [...group.querySelectorAll('.file-checkbox')].some(c => c.checked);
+  group.classList.toggle('has-selected', anySelected);
+  const meta = group.querySelector('.group-meta');
+  const countBadge = meta.querySelector('.badge:last-child');
+  const selCount = [...group.querySelectorAll('.file-checkbox')].filter(c => c.checked).length;
+  if (selCount > 0) {
+    if (countBadge && countBadge.style.color === 'var(--primary)') {
+      countBadge.textContent = `${selCount} selected`;
+    } else {
+      const newBadge = document.createElement('span');
+      newBadge.className = 'badge';
+      newBadge.style.borderColor = 'var(--primary-dim)';
+      newBadge.style.color = 'var(--primary)';
+      newBadge.textContent = `${selCount} selected`;
+      meta.appendChild(newBadge);
+    }
+  } else {
+    if (countBadge && countBadge.style.color === 'var(--primary)') {
+      countBadge.remove();
+    }
+  }
+}
+
+function selectAllInGroup(gi, e) {
+  e.stopPropagation();
+  const checkboxes = document.querySelectorAll(`#group-${gi} .file-checkbox`);
+  checkboxes.forEach(cb => {
+    if (!cb.checked) {
+      cb.checked = true;
+      selectedPaths.add(cb.dataset.path);
+      selectedItemIds.set(cb.dataset.path, { item_id: cb.dataset.itemId, source_id: cb.dataset.sourceId, label: cb.dataset.label, path: cb.dataset.path, size: parseInt(cb.dataset.size, 10) || 0 });
+      const cardId = cb.id.replace('chk-', '');
+      document.getElementById(`card-${cardId}`)?.classList.add('selected');
+    }
+  });
+  document.getElementById(`group-${gi}`).classList.add('has-selected');
+  updateSelectionUI();
+}
+
+function clearGroupSelection(gi, e) {
+  e.stopPropagation();
+  const checkboxes = document.querySelectorAll(`#group-${gi} .file-checkbox`);
+  checkboxes.forEach(cb => {
+    cb.checked = false;
+    selectedPaths.delete(cb.dataset.path);
+    const cardId = cb.id.replace('chk-', '');
+    document.getElementById(`card-${cardId}`)?.classList.remove('selected');
+  });
+  document.getElementById(`group-${gi}`).classList.remove('has-selected');
+  updateSelectionUI();
+}
+
+function selectAllVisible() {
+  const visible = getVisibleGroups();
+  visible.forEach(group => {
+    const gi = group.dataset.gi;
+    const checkboxes = group.querySelectorAll('.file-checkbox');
+    checkboxes.forEach(cb => {
+      cb.checked = true;
+      selectedPaths.add(cb.dataset.path);
+      selectedItemIds.set(cb.dataset.path, { item_id: cb.dataset.itemId, source_id: cb.dataset.sourceId, label: cb.dataset.label, path: cb.dataset.path, size: parseInt(cb.dataset.size, 10) || 0 });
+      const cardId = cb.id.replace('chk-', '');
+      document.getElementById(`card-${cardId}`)?.classList.add('selected');
+    });
+    group.classList.add('has-selected');
+  });
+  updateSelectionUI();
+}
+
+function clearSelection() {
+  selectedPaths.clear();
+  selectedItemIds.clear();
+  document.querySelectorAll('.file-checkbox').forEach(cb => { cb.checked = false; });
+  document.querySelectorAll('.file-card').forEach(c => c.classList.remove('selected'));
+  document.querySelectorAll('.dupe-group').forEach(g => g.classList.remove('has-selected'));
+  updateSelectionUI();
+}
+
+function getVisibleGroups() {
+  return [...document.querySelectorAll('.dupe-group')].filter(g => g.style.display !== 'none');
+}
+
+function updateSelectionUI() {
+  const count = selectedPaths.size;
+  document.getElementById('selected-count').textContent = count;
+  document.getElementById('btn-export').disabled = count === 0;
+  document.getElementById('btn-delete').disabled = count === 0;
+
+  let totalBytes = 0;
+  selectedItemIds.forEach(item => {
+    totalBytes += (item.size || 0);
+  });
+
+  const sizeWrap = document.getElementById('selected-size-wrap');
+  if (count > 0) {
+    sizeWrap.style.display = 'inline';
+    document.getElementById('selected-size').textContent = formatSize(totalBytes);
+  } else {
+    sizeWrap.style.display = 'none';
+  }
+}
+
+// ─── FILTER ───────────────────────────────────────────
+function filterResults() {
+  const q = document.getElementById('inp-search').value.toLowerCase().trim();
+  if (!q) {
+    if (currentMediaType === 'series') {
+      renderSeriesResults(allDuplicates);
+    } else {
+      renderResults(allDuplicates);
+    }
+    selectedPaths.forEach(path => {
+      document.querySelectorAll(`.file-checkbox`).forEach(cb => {
+        if (cb.dataset.path === path) {
+          cb.checked = true;
+          const cardId = cb.id.replace('chk-', '');
+          document.getElementById(`card-${cardId}`)?.classList.add('selected');
+        }
+      });
+    });
+    return;
+  }
+  if (currentMediaType === 'series') {
+    const filtered = allDuplicates.filter(g =>
+      g.series_name.toLowerCase().includes(q)
+    );
+    renderSeriesResults(filtered);
+  } else {
+    const filtered = allDuplicates.filter(g =>
+      g.name.toLowerCase().includes(q) ||
+      (g.year && String(g.year).includes(q))
+    );
+    renderResults(filtered);
+  }
+}
+
+// ─── SCORING CONFIG ──────────────────────────────────
+async function loadScoringConfig() {
+  try {
+    const res = await fetch('/api/scoring-config');
+    if (!res.ok) return;
+    scoringConfig = await res.json();
+  } catch (_) {}
+}
+
+function renderScoreTable(containerId, scores) {
+  const container = document.getElementById(containerId);
+  const entries = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  container.innerHTML = entries.map(([key, val]) => `
+    <div class="score-row">
+      <input type="text" class="score-key" value="${escHtml(key)}" readonly>
+      <input type="number" class="score-val" value="${val}" data-key="${escAttr(key)}">
+      <button class="btn-icon" onclick="this.closest('.score-row').remove()" title="Remove">✕</button>
+    </div>
+  `).join('') + `
+    <div class="score-add-row">
+      <input type="text" class="score-key" placeholder="${escHtml(t('new_entry_placeholder'))}" id="${containerId}-new-key">
+      <input type="number" class="score-val" value="0" id="${containerId}-new-val">
+      <button class="btn-icon" onclick="addScoreEntry('${containerId}')" title="Add" style="color:var(--green); border-color:var(--green);">+</button>
+    </div>
+  `;
+}
+
+function addScoreEntry(containerId) {
+  const keyInput = document.getElementById(`${containerId}-new-key`);
+  const valInput = document.getElementById(`${containerId}-new-val`);
+  const key = keyInput.value.trim();
+  if (!key) return;
+  const val = parseInt(valInput.value) || 0;
+  const container = document.getElementById(containerId);
+  const addRow = container.querySelector('.score-add-row');
+  const row = document.createElement('div');
+  row.className = 'score-row';
+  row.innerHTML = `
+    <input type="text" class="score-key" value="${escHtml(key)}" readonly>
+    <input type="number" class="score-val" value="${val}" data-key="${escAttr(key)}">
+    <button class="btn-icon" onclick="this.closest('.score-row').remove()" title="Remove">✕</button>
+  `;
+  container.insertBefore(row, addRow);
+  keyInput.value = '';
+  valInput.value = '0';
+}
+
+function readScoreTable(containerId) {
+  const rows = document.querySelectorAll(`#${containerId} .score-row`);
+  const result = {};
+  rows.forEach(row => {
+    const key = row.querySelector('.score-key').value.trim();
+    const val = parseInt(row.querySelector('.score-val').value) || 0;
+    if (key) result[key] = val;
+  });
+  return result;
+}
+
+function renderFilenamePatterns(patterns) {
+  const container = document.getElementById('scfg-filename-patterns');
+  container.innerHTML = '';
+  for (const [pattern, score] of Object.entries(patterns)) {
+    addFilenamePatternRow(pattern, score);
+  }
+}
+
+function addFilenamePatternRow(pattern = '', score = 0) {
+  const container = document.getElementById('scfg-filename-patterns');
+  const row = document.createElement('div');
+  row.className = 'score-row';
+  row.innerHTML = `
+    <input type="text" class="score-key" value="${escHtml(pattern)}" placeholder="e.g. *Remux*">
+    <input type="number" class="score-val" value="${score}">
+    <button class="btn-icon" onclick="this.closest('.score-row').remove()" title="Remove">✕</button>
+  `;
+  container.appendChild(row);
+}
+
+function readFilenamePatterns() {
+  const rows = document.querySelectorAll('#scfg-filename-patterns .score-row');
+  const result = {};
+  rows.forEach(row => {
+    const key = row.querySelector('.score-key').value.trim();
+    const val = parseInt(row.querySelector('.score-val').value) || 0;
+    if (key) result[key] = val;
+  });
+  return result;
+}
+
+async function openScoringConfig() {
+  if (!scoringConfig) await loadScoringConfig();
+  if (!scoringConfig) {
+    toast(t('error_load_scoring'), 'error');
+    return;
+  }
+  document.getElementById('scfg-auto-select').checked = scoringConfig.auto_select_losers || false;
+  document.getElementById('scfg-score-filesize').checked = scoringConfig.score_filesize !== false;
+  renderScoreTable('scfg-video-codecs', scoringConfig.video_codec_scores || {});
+  renderScoreTable('scfg-audio-codecs', scoringConfig.audio_codec_scores || {});
+  renderScoreTable('scfg-resolutions', scoringConfig.video_resolution_scores || {});
+  renderFilenamePatterns(scoringConfig.filename_scores || {});
+  document.getElementById('scoring-config-modal').classList.add('open');
+}
+
+function closeScoringConfig() {
+  document.getElementById('scoring-config-modal').classList.remove('open');
+}
+
+function onScoringModalOverlayClick(e) {
+  if (e.target === e.currentTarget) closeScoringConfig();
+}
+
+async function saveScoringConfig() {
+  const newConfig = {
+    auto_select_losers: document.getElementById('scfg-auto-select').checked,
+    score_filesize: document.getElementById('scfg-score-filesize').checked,
+    video_codec_scores: readScoreTable('scfg-video-codecs'),
+    audio_codec_scores: readScoreTable('scfg-audio-codecs'),
+    video_resolution_scores: readScoreTable('scfg-resolutions'),
+    filename_scores: readFilenamePatterns(),
+  };
+  try {
+    const res = await fetch('/api/scoring-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newConfig),
+    });
+    if (!res.ok) throw new Error('Save failed');
+    scoringConfig = newConfig;
+    closeScoringConfig();
+    toast(t('scoring_saved'), 'success');
+  } catch (e) {
+    toast(t('error_save_scoring') + e.message, 'error');
+  }
+}
+
+async function resetScoringDefaults() {
+  try {
+    await (await fetch('/api/config')).json();
+    scoringConfig = null;
+    await loadScoringConfig();
+    if (scoringConfig) {
+      document.getElementById('scfg-auto-select').checked = false;
+      document.getElementById('scfg-score-filesize').checked = true;
+      renderScoreTable('scfg-video-codecs', scoringConfig.video_codec_scores || {});
+      renderScoreTable('scfg-audio-codecs', scoringConfig.audio_codec_scores || {});
+      renderScoreTable('scfg-resolutions', scoringConfig.video_resolution_scores || {});
+      renderFilenamePatterns(scoringConfig.filename_scores || {});
+    }
+    toast(t('scoring_reset'), 'success');
+  } catch (e) {
+    toast(t('error_reset') + e.message, 'error');
+  }
+}
+
+// ─── EXPORT CONFIG (combined tabbed modal) ────────────
+let exportConfig = { prefix: '', suffix: '', stripFilename: false, pathMappings: [] };
+
+const PREVIEW_SAMPLE = '/mnt/media/movies/Inception (2010)/Inception.2010.1080p.mkv';
+const SERIES_PREVIEW_SAMPLE = '/mnt/media/tv/Breaking Bad/Season 01/Breaking.Bad.S01E01.1080p.mkv';
+
+function applyPathMappings(path, mappings) {
+  for (const m of mappings) {
+    if (m.from && path.startsWith(m.from)) {
+      return m.to + path.slice(m.from.length);
+    }
+  }
+  return path;
+}
+
+function applyExportConfig(path) {
+  let p = applyPathMappings(path, exportConfig.pathMappings);
+  if (exportConfig.stripFilename) {
+    const slash = p.lastIndexOf('/');
+    if (slash > 0) p = p.substring(0, slash);
+  }
+  return exportConfig.prefix + p + exportConfig.suffix;
+}
+
+function applySeriesExportConfig(path) {
+  let p = applyPathMappings(path, exportConfig.pathMappings);
+  if (seriesExportConfig.stripFilename) {
+    const slash = p.lastIndexOf('/');
+    if (slash > 0) p = p.substring(0, slash);
+  }
+  return seriesExportConfig.prefix + p + seriesExportConfig.suffix;
+}
+
+function readMappingRows() {
+  return [...document.querySelectorAll('#ecfg-mappings .mapping-row')].map(row => ({
+    from: row.querySelector('.map-from').value.trim(),
+    to:   row.querySelector('.map-to').value.trim(),
+  }));
+}
+
+function switchExportTab(tab) {
+  currentExportTab = tab;
+  document.getElementById('export-tab-content-movies').style.display = tab === 'movies' ? '' : 'none';
+  document.getElementById('export-tab-content-series').style.display = tab === 'series' ? '' : 'none';
+  document.getElementById('export-tab-btn-movies').classList.toggle('active', tab === 'movies');
+  document.getElementById('export-tab-btn-series').classList.toggle('active', tab === 'series');
+  updateExportPreview();
+}
+
+function updateExportPreview() {
+  const isSeries = currentExportTab === 'series';
+  const prefix   = document.getElementById(isSeries ? 'secfg-prefix' : 'ecfg-prefix').value;
+  const suffix   = document.getElementById(isSeries ? 'secfg-suffix' : 'ecfg-suffix').value;
+  const strip    = document.getElementById(isSeries ? 'secfg-strip' : 'ecfg-strip').checked;
+  const sample   = isSeries ? SERIES_PREVIEW_SAMPLE : PREVIEW_SAMPLE;
+  const mappings = readMappingRows();
+
+  let path = applyPathMappings(sample, mappings);
+  if (strip) {
+    const slash = path.lastIndexOf('/');
+    if (slash > 0) path = path.substring(0, slash);
+  }
+
+  const el  = document.getElementById('ecfg-preview');
+  const pre = prefix ? `<span class="seg-prefix">${escHtml(prefix)}</span>` : '';
+  const suf = suffix ? `<span class="seg-suffix">${escHtml(suffix)}</span>` : '';
+  el.innerHTML = pre + `<span class="seg-path">${escHtml(path)}</span>` + suf;
+}
+
+function addMappingRow(fromVal = '', toVal = '') {
+  const container = document.getElementById('ecfg-mappings');
+  const row = document.createElement('div');
+  row.className = 'mapping-row';
+  row.innerHTML = `
+    <input type="text" class="map-from" placeholder="${escHtml(t('emby_path_prefix'))}" value="${escHtml(fromVal)}" oninput="updateExportPreview()">
+    <span class="mapping-arrow">→</span>
+    <input type="text" class="map-to"   placeholder="${escHtml(t('local_path_prefix'))}"  value="${escHtml(toVal)}"   oninput="updateExportPreview()">
+    <button class="btn-icon" onclick="this.closest('.mapping-row').remove(); updateExportPreview();" title="Remove">✕</button>
+  `;
+  container.appendChild(row);
+  updateExportPreview();
+}
+
+async function openExportConfig() {
+  document.getElementById('ecfg-prefix').value = exportConfig.prefix;
+  document.getElementById('ecfg-suffix').value = exportConfig.suffix;
+  document.getElementById('ecfg-strip').checked = exportConfig.stripFilename;
+  document.getElementById('secfg-prefix').value = seriesExportConfig.prefix;
+  document.getElementById('secfg-suffix').value = seriesExportConfig.suffix;
+  document.getElementById('secfg-strip').checked = seriesExportConfig.stripFilename;
+  const container = document.getElementById('ecfg-mappings');
+  container.innerHTML = '';
+  exportConfig.pathMappings.forEach(m => addMappingRow(m.from, m.to));
+  switchExportTab(currentExportTab);
+  document.getElementById('export-config-modal').classList.add('open');
+}
+
+function closeExportConfig() {
+  document.getElementById('export-config-modal').classList.remove('open');
+}
+
+function onExportModalOverlayClick(e) {
+  if (e.target === e.currentTarget) closeExportConfig();
+}
+
+async function saveExportConfig() {
+  exportConfig.prefix        = document.getElementById('ecfg-prefix').value;
+  exportConfig.suffix        = document.getElementById('ecfg-suffix').value;
+  exportConfig.stripFilename = document.getElementById('ecfg-strip').checked;
+  exportConfig.pathMappings  = readMappingRows().filter(m => m.from);
+
+  seriesExportConfig.prefix        = document.getElementById('secfg-prefix').value;
+  seriesExportConfig.suffix        = document.getElementById('secfg-suffix').value;
+  seriesExportConfig.stripFilename = document.getElementById('secfg-strip').checked;
+
+  try {
+    const [r1, r2] = await Promise.all([
+      fetch('/api/export-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(exportConfig),
+      }),
+      fetch('/api/export-config/series', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(seriesExportConfig),
+      }),
+    ]);
+    if (!r1.ok || !r2.ok) throw new Error('Save failed');
+    closeExportConfig();
+    toast(t('export_saved'), 'success');
+  } catch (e) {
+    toast(t('error_save_export') + e.message, 'error');
+  }
+}
+
+async function loadExportConfig() {
+  try {
+    const res = await fetch('/api/export-config');
+    if (!res.ok) return;
+    const data = await res.json();
+    exportConfig.prefix        = data.prefix        || '';
+    exportConfig.suffix        = data.suffix        || '';
+    exportConfig.stripFilename = data.stripFilename || false;
+    exportConfig.pathMappings  = data.pathMappings  || [];
+  } catch (_) {}
+}
+
+async function loadSeriesExportConfig() {
+  try {
+    const res = await fetch('/api/export-config/series');
+    if (!res.ok) return;
+    const data = await res.json();
+    seriesExportConfig.prefix        = data.prefix        || '';
+    seriesExportConfig.suffix        = data.suffix        || '';
+    seriesExportConfig.stripFilename = data.stripFilename || false;
+  } catch (_) {}
+}
+
+// ─── EXPORT ───────────────────────────────────────────
+async function exportPaths() {
+  if (!selectedPaths.size) return;
+  try {
+    const isSeries = currentMediaType === 'series';
+    const paths = [...selectedPaths].map(isSeries ? applySeriesExportConfig : applyExportConfig);
+    const filename = isSeries ? 'duplicate_episode_paths.txt' : 'duplicate_movie_paths.txt';
+    const res = await fetch('/api/export', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ paths })
+    });
+    if (!res.ok) { toast(t('error_export'), 'error'); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast(tf('exported_paths', {count: selectedPaths.size}), 'success');
+  } catch(e) {
+    toast(t('error_export_prefix') + e.message, 'error');
+  }
+}
+
+// ─── DELETE ───────────────────────────────────────────
+function openDeleteConfirm() {
+  if (!selectedItemIds.size) return;
+  document.getElementById('del-files').checked = false;
+
+  const listEl = document.getElementById('delete-list');
+  listEl.innerHTML = [...selectedItemIds.values()].map(item => `
+    <div class="delete-list-item">
+      <div class="dli-name">${escHtml(item.label || 'Unknown')}</div>
+      <div>${escHtml(item.path || '—')}</div>
+    </div>
+  `).join('');
+
+  document.getElementById('delete-confirm-modal').classList.add('open');
+}
+
+function closeDeleteConfirm() {
+  document.getElementById('delete-confirm-modal').classList.remove('open');
+}
+
+function onDeleteModalOverlayClick(e) {
+  if (e.target === e.currentTarget) closeDeleteConfirm();
+}
+
+async function confirmDelete() {
+  const deleteFiles = document.getElementById('del-files').checked;
+  const items = [...selectedItemIds.values()];
+  const itemIds = [...new Set(items.map(i => i.item_id).filter(Boolean))];
+  const pathsToRemove = new Set(items.map(i => i.path));
+
+  const btn = document.getElementById('btn-confirm-delete');
+  btn.disabled = true;
+  btn.textContent = t('deleting');
+
+  try {
+    const res = await fetch('/api/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_ids: itemIds, delete_files: deleteFiles }),
+    });
+    const data = await res.json();
+
+    if (data.errors && data.errors.length) {
+      toast(tf('deleted_with_errors', {deleted: data.deleted.length, errors: data.errors.length}), 'error');
+    } else {
+      toast(tf('deleted_items', {count: data.deleted.length}), 'success');
+    }
+
+    pathsToRemove.forEach(path => {
+      selectedPaths.delete(path);
+      selectedItemIds.delete(path);
+      document.querySelectorAll('.file-checkbox').forEach(cb => {
+        if (cb.dataset.path === path) {
+          const cardId = cb.id.replace('chk-', '');
+          document.getElementById(`card-${cardId}`)?.remove();
+        }
+      });
+    });
+
+    document.querySelectorAll('.dupe-group').forEach(group => {
+      const remaining = group.querySelectorAll('.file-card').length;
+      if (remaining < 2) group.remove();
+    });
+
+    updateSelectionUI();
+    closeDeleteConfirm();
+  } catch (e) {
+    toast(t('error_delete') + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = t('delete');
+  }
+}
+
+// ─── STATUS ───────────────────────────────────────────
+function setStatus(state, text) {
+  document.getElementById('status-dot').className = `status-dot ${state}`;
+  document.getElementById('status-text').textContent = text;
+}
+
+// ─── TOAST ────────────────────────────────────────────
+let toastTimer;
+function toast(msg, type = '') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'show ' + (type || '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = ''; }, 3500);
+}
+
+// ─── UTILS ────────────────────────────────────────────
+function escHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escAttr(s) {
+  if (s == null) return '';
+  return String(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function formatSize(bytes) {
+    if (!bytes) return "0 B";
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+</script>
+</body>
+</html>

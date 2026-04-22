@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Data / secrets
+data/config.json
+
+# macOS
+.DS_Store
+
+# JetBrains IDE
+.idea/
+*.iml
+
+# Docker
+*.log
