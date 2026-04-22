@@ -2,6 +2,8 @@
 
 A web application for finding and managing duplicate movies in your Emby media server library. Scans your entire movie collection, identifies duplicates using provider IDs (IMDb/TMDb) or title+year matching, and scores each file to help you decide which copies to keep.
 
+<img width="1451" height="752" alt="emby-dupe-detective" src="https://github.com/user-attachments/assets/c65c5f6a-1bf9-4af5-8da2-ac3785aa8b31" />
+
 ## Features
 
 - **Duplicate Detection** - scans your Emby library and groups duplicate movies by IMDb/TMDb ID (falls back to title + year matching)
