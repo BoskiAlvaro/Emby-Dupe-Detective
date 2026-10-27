@@ -36,6 +36,7 @@
       <button class="btn-header" id="btn-header-setup" onclick="openSetupModal()" data-i18n="header_setup">Setup</button>
       <button class="btn-header" onclick="openScoringConfig()" data-i18n="header_scoring">⚖ Scoring</button>
       <button class="btn-header" onclick="openExportConfig()" data-i18n="header_export">↧ Export</button>
+      <button class="btn-header" onclick="openExclusionsModal()" data-i18n="header_exclusions">⊘ Exclusions</button>
     </div>
     <div class="lang-selector">
       <select id="lang-select" onchange="setLanguage(this.value)">
@@ -96,6 +97,10 @@
     <div class="stat-block">
       <span class="stat-num" id="stat-files">—</span>
       <span class="stat-label" data-i18n="stat_affected_files">Affected Files</span>
+    </div>
+    <div class="stat-block stat-block-link" onclick="openExclusionsModal()">
+      <span class="stat-num" id="stat-excluded">—</span>
+      <span class="stat-label" data-i18n="stat_excluded">Exclusions Applied</span>
     </div>
   </div>
 
@@ -302,6 +307,43 @@
 </div>
 
 <!-- ═══════════════════════════════════════════════
+     EXCLUSIONS MODAL (tabbed: Movies / TV Series)
+════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="exclusions-modal" onclick="onExclusionsModalOverlayClick(event)">
+  <div class="modal exclusions-modal">
+    <div class="modal-header">
+      <div class="modal-title" data-i18n="exclusions_title">EXCLUSIONS</div>
+      <button class="modal-close" onclick="closeExclusionsModal()">✕</button>
+    </div>
+    <div class="modal-tabs">
+      <button class="modal-tab active" id="excl-tab-btn-movies" onclick="switchExclusionsTab('movies')"><span data-i18n="movies">Movies</span> <span class="excl-tab-count" id="excl-tab-count-movies"></span></button>
+      <button class="modal-tab" id="excl-tab-btn-series" onclick="switchExclusionsTab('series')"><span data-i18n="tv_series">TV Series</span> <span class="excl-tab-count" id="excl-tab-count-series"></span></button>
+    </div>
+    <div class="modal-body">
+      <div class="scoring-intro" data-i18n="exclusions_intro">
+        Excluded groups and files are ignored by future scans. A group exclusion stops applying if a new file appears in that group. Remove an entry to have it detected again.
+      </div>
+
+      <div class="search-wrap excl-search">
+        <span class="search-icon">⌕</span>
+        <input type="text" id="inp-excl-search" data-i18n-placeholder="exclusions_search_placeholder" placeholder="Search title or path…" oninput="renderExclusions()">
+      </div>
+
+      <div class="modal-section-title"><span data-i18n="exclusions_groups_title">Excluded Groups</span> <span class="excl-section-count" id="excl-groups-count"></span></div>
+      <div class="excl-list" id="excl-groups"></div>
+
+      <div class="modal-section-title"><span data-i18n="exclusions_files_title">Excluded Files</span> <span class="excl-section-count" id="excl-files-count"></span></div>
+      <div class="excl-list" id="excl-files"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="btn-excl-clear" onclick="clearExclusionsTab()" data-i18n="exclusions_clear_all">Remove All</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-primary" onclick="closeExclusionsModal()" data-i18n="close">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════
      SCORING CONFIG MODAL
 ════════════════════════════════════════════════════ -->
 <div class="modal-overlay" id="scoring-config-modal" onclick="onScoringModalOverlayClick(event)">
@@ -362,6 +404,10 @@ let selectedItemIds = new Map();
 let autoSelectLosers = false;
 let scoringConfig = null;
 let currentMediaType = 'movies';
+let resultsMediaType = 'movies';   // media type of the currently displayed results
+let exclusions = { groups: [], files: [] };
+let exclusionsApplied = 0;
+let currentExclusionsTab = 'movies';
 let currentExportTab = 'movies';
 let seriesExportConfig = { prefix: '', suffix: '', stripFilename: false };
 
@@ -564,6 +610,8 @@ async function startScan() {
     }
 
     allDuplicates = data.duplicates;
+    resultsMediaType = isSeries ? 'series' : 'movies';
+    exclusionsApplied = data.exclusions_applied || 0;
     autoSelectLosers = data.auto_select_losers || false;
     selectedPaths.clear();
     selectedItemIds.clear();
@@ -608,6 +656,7 @@ async function startScan() {
     document.getElementById('stat-total-label').textContent = isSeries ? t('stat_total_episodes') : t('stat_total_movies');
     document.getElementById('stat-groups').textContent = data.duplicate_groups;
     document.getElementById('stat-files').textContent  = data.duplicate_files;
+    document.getElementById('stat-excluded').textContent = exclusionsApplied;
 
     document.getElementById('section-results').style.display = 'block';
     if (isSeries) {
@@ -663,7 +712,7 @@ function renderResults(groups) {
             data-source-id="${escAttr(file.source_id || '')}"
             data-label="${escAttr((file.name || '') + (file.year ? ' (' + file.year + ')' : ''))}"
             data-size="${file.size || 0}"
-            onchange="togglePath(this, '${gi}-${fi}')"
+            onchange="togglePath(this)"
             ${checked}>
           <div class="file-details">
             <div class="file-path">
@@ -691,6 +740,7 @@ function renderResults(groups) {
               ${audioHtml}
             </div>
           </div>
+          ${fileExcludeBtnHtml(file)}
         </div>`;
     }).join('');
 
@@ -706,15 +756,18 @@ function renderResults(groups) {
           </div>
           <div class="group-meta">
             <span class="badge">${group.files.length} ${escHtml(t('files_label'))}</span>
-            ${selInGroup > 0 ? `<span class="badge" style="border-color:var(--primary-dim);color:var(--primary)">${selInGroup} selected</span>` : ''}
+            ${selInGroup > 0 ? `<span class="badge sel-badge">${escHtml(tf('selected_badge', {count: selInGroup}))}</span>` : ''}
           </div>
           <span class="chevron">▾</span>
         </div>
-        <div class="group-body" id="gb-${gi}">
+        <div class="group-body" id="gb-${gi}" data-open-key="g:${escAttr(group.key)}">
           ${filesHtml}
           <div class="group-select-row">
-            <button class="group-select-all" onclick="selectAllInGroup(${gi}, event)">${escHtml(t('select_all_group'))}</button>
-            <button class="group-select-all" onclick="clearGroupSelection(${gi}, event)">${escHtml(t('clear_group'))}</button>
+            <div class="group-select-actions">
+              <button class="group-select-all" onclick="selectAllInGroup(${gi}, event)">${escHtml(t('select_all_group'))}</button>
+              <button class="group-select-all" onclick="clearGroupSelection(${gi}, event)">${escHtml(t('clear_group'))}</button>
+            </div>
+            ${groupExcludeBtnHtml(group)}
           </div>
         </div>
       </div>`;
@@ -779,7 +832,7 @@ function renderSeriesResults(seriesList) {
                 data-label="${escAttr(series.series_name + ' ' + epLabel)}"
                 data-size="${file.size || 0}"
                 data-series-idx="${si}"
-                onchange="togglePath(this, '${gi}-${fi}')"
+                onchange="togglePath(this)"
                 ${checked}>
               <div class="file-details">
                 <div class="file-path">
@@ -797,6 +850,7 @@ function renderSeriesResults(seriesList) {
                   ${audioHtml}
                 </div>
               </div>
+              ${fileExcludeBtnHtml(file)}
             </div>`;
         }).join('');
 
@@ -807,11 +861,14 @@ function renderSeriesResults(seriesList) {
               <span class="badge">${ep.files.length} ${escHtml(t('files_label'))}</span>
               <span class="chevron">▾</span>
             </div>
-            <div class="group-body" id="gb-${globalIdx}">
+            <div class="group-body" id="gb-${globalIdx}" data-open-key="e:${escAttr(ep.key)}">
               ${filesHtml}
               <div class="group-select-row">
-                <button class="group-select-all" onclick="selectAllInGroup(${globalIdx}, event)">${escHtml(t('select_all_group'))}</button>
-                <button class="group-select-all" onclick="clearGroupSelection(${globalIdx}, event)">${escHtml(t('clear_group'))}</button>
+                <div class="group-select-actions">
+                  <button class="group-select-all" onclick="selectAllInGroup(${globalIdx}, event)">${escHtml(t('select_all_group'))}</button>
+                  <button class="group-select-all" onclick="clearGroupSelection(${globalIdx}, event)">${escHtml(t('clear_group'))}</button>
+                </div>
+                ${groupExcludeBtnHtml(ep)}
               </div>
             </div>
           </div>`;
@@ -838,11 +895,11 @@ function renderSeriesResults(seriesList) {
           </div>
           <div class="group-meta">
             <span class="badge">${seriesFileCount} ${escHtml(t('files_label'))}</span>
-            ${seriesSelCount > 0 ? `<span class="badge" style="border-color:var(--primary-dim);color:var(--primary)">${seriesSelCount} selected</span>` : ''}
+            ${seriesSelCount > 0 ? `<span class="badge sel-badge">${escHtml(tf('selected_badge', {count: seriesSelCount}))}</span>` : ''}
           </div>
           <span class="chevron">▾</span>
         </div>
-        <div class="group-body" id="sgb-${si}">
+        <div class="group-body" id="sgb-${si}" data-open-key="s:${escAttr(series.series_name)}">
           ${seasonsHtml}
         </div>
       </div>`;
@@ -882,86 +939,76 @@ function collapseAllGroups() {
   document.querySelectorAll('.episode-header').forEach(h => h.classList.remove('open'));
 }
 
-function togglePath(checkbox, cardId) {
-  const path = checkbox.dataset.path;
-  const card = document.getElementById(`card-${cardId}`);
-  if (checkbox.checked) {
-    selectedPaths.add(path);
-    selectedItemIds.set(path, { item_id: checkbox.dataset.itemId, source_id: checkbox.dataset.sourceId, label: checkbox.dataset.label, path: path, size: parseInt(checkbox.dataset.size, 10) || 0 });
-    card.classList.add('selected');
-  } else {
-    selectedPaths.delete(path);
-    selectedItemIds.delete(path);
-    card.classList.remove('selected');
-  }
-  updateSelectionUI();
-  const gi = cardId.split('-')[0];
-  const group = document.getElementById(`group-${gi}`);
-  const anySelected = [...group.querySelectorAll('.file-checkbox')].some(c => c.checked);
-  group.classList.toggle('has-selected', anySelected);
-  const meta = group.querySelector('.group-meta');
-  const countBadge = meta.querySelector('.badge:last-child');
+function selectCheckbox(cb) {
+  cb.checked = true;
+  selectedPaths.add(cb.dataset.path);
+  selectedItemIds.set(cb.dataset.path, { item_id: cb.dataset.itemId, source_id: cb.dataset.sourceId, label: cb.dataset.label, path: cb.dataset.path, size: parseInt(cb.dataset.size, 10) || 0 });
+  document.getElementById(`card-${cb.id.replace('chk-', '')}`)?.classList.add('selected');
+}
+
+function deselectCheckbox(cb) {
+  cb.checked = false;
+  selectedPaths.delete(cb.dataset.path);
+  selectedItemIds.delete(cb.dataset.path);
+  document.getElementById(`card-${cb.id.replace('chk-', '')}`)?.classList.remove('selected');
+}
+
+// The element holding the checkboxes of duplicate group `gi`:
+// a movie group, or a single episode inside a series group.
+function groupSelectionScope(gi) {
+  return document.getElementById(`group-${gi}`) || document.getElementById(`ep-group-${gi}`);
+}
+
+// Updates the highlight and "N selected" badge of the top-level group
+// (movie or whole series) that contains `el`.
+function refreshGroupSelection(el) {
+  const group = el?.closest('.dupe-group');
+  if (!group) return;
   const selCount = [...group.querySelectorAll('.file-checkbox')].filter(c => c.checked).length;
+  group.classList.toggle('has-selected', selCount > 0);
+  const meta = group.querySelector('.group-meta');
+  let badge = meta.querySelector('.sel-badge');
   if (selCount > 0) {
-    if (countBadge && countBadge.style.color === 'var(--primary)') {
-      countBadge.textContent = `${selCount} selected`;
-    } else {
-      const newBadge = document.createElement('span');
-      newBadge.className = 'badge';
-      newBadge.style.borderColor = 'var(--primary-dim)';
-      newBadge.style.color = 'var(--primary)';
-      newBadge.textContent = `${selCount} selected`;
-      meta.appendChild(newBadge);
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'badge sel-badge';
+      meta.appendChild(badge);
     }
+    badge.textContent = tf('selected_badge', {count: selCount});
   } else {
-    if (countBadge && countBadge.style.color === 'var(--primary)') {
-      countBadge.remove();
-    }
+    badge?.remove();
   }
+}
+
+function togglePath(checkbox) {
+  if (checkbox.checked) selectCheckbox(checkbox);
+  else deselectCheckbox(checkbox);
+  refreshGroupSelection(checkbox);
+  updateSelectionUI();
 }
 
 function selectAllInGroup(gi, e) {
   e.stopPropagation();
-  const checkboxes = document.querySelectorAll(`#group-${gi} .file-checkbox`);
-  checkboxes.forEach(cb => {
-    if (!cb.checked) {
-      cb.checked = true;
-      selectedPaths.add(cb.dataset.path);
-      selectedItemIds.set(cb.dataset.path, { item_id: cb.dataset.itemId, source_id: cb.dataset.sourceId, label: cb.dataset.label, path: cb.dataset.path, size: parseInt(cb.dataset.size, 10) || 0 });
-      const cardId = cb.id.replace('chk-', '');
-      document.getElementById(`card-${cardId}`)?.classList.add('selected');
-    }
-  });
-  document.getElementById(`group-${gi}`).classList.add('has-selected');
+  const scope = groupSelectionScope(gi);
+  if (!scope) return;
+  scope.querySelectorAll('.file-checkbox').forEach(selectCheckbox);
+  refreshGroupSelection(scope);
   updateSelectionUI();
 }
 
 function clearGroupSelection(gi, e) {
   e.stopPropagation();
-  const checkboxes = document.querySelectorAll(`#group-${gi} .file-checkbox`);
-  checkboxes.forEach(cb => {
-    cb.checked = false;
-    selectedPaths.delete(cb.dataset.path);
-    const cardId = cb.id.replace('chk-', '');
-    document.getElementById(`card-${cardId}`)?.classList.remove('selected');
-  });
-  document.getElementById(`group-${gi}`).classList.remove('has-selected');
+  const scope = groupSelectionScope(gi);
+  if (!scope) return;
+  scope.querySelectorAll('.file-checkbox').forEach(deselectCheckbox);
+  refreshGroupSelection(scope);
   updateSelectionUI();
 }
 
 function selectAllVisible() {
-  const visible = getVisibleGroups();
-  visible.forEach(group => {
-    const gi = group.dataset.gi;
-    const checkboxes = group.querySelectorAll('.file-checkbox');
-    checkboxes.forEach(cb => {
-      cb.checked = true;
-      selectedPaths.add(cb.dataset.path);
-      selectedItemIds.set(cb.dataset.path, { item_id: cb.dataset.itemId, source_id: cb.dataset.sourceId, label: cb.dataset.label, path: cb.dataset.path, size: parseInt(cb.dataset.size, 10) || 0 });
-      const cardId = cb.id.replace('chk-', '');
-      document.getElementById(`card-${cardId}`)?.classList.add('selected');
-    });
-    group.classList.add('has-selected');
+  getVisibleGroups().forEach(group => {
+    group.querySelectorAll('.file-checkbox').forEach(selectCheckbox);
+    refreshGroupSelection(group);
   });
   updateSelectionUI();
 }
@@ -972,6 +1019,7 @@ function clearSelection() {
   document.querySelectorAll('.file-checkbox').forEach(cb => { cb.checked = false; });
   document.querySelectorAll('.file-card').forEach(c => c.classList.remove('selected'));
   document.querySelectorAll('.dupe-group').forEach(g => g.classList.remove('has-selected'));
+  document.querySelectorAll('.sel-badge').forEach(b => b.remove());
   updateSelectionUI();
 }
 
@@ -1003,7 +1051,7 @@ function updateSelectionUI() {
 function filterResults() {
   const q = document.getElementById('inp-search').value.toLowerCase().trim();
   if (!q) {
-    if (currentMediaType === 'series') {
+    if (resultsMediaType === 'series') {
       renderSeriesResults(allDuplicates);
     } else {
       renderResults(allDuplicates);
@@ -1019,7 +1067,7 @@ function filterResults() {
     });
     return;
   }
-  if (currentMediaType === 'series') {
+  if (resultsMediaType === 'series') {
     const filtered = allDuplicates.filter(g =>
       g.series_name.toLowerCase().includes(q)
     );
@@ -1030,6 +1078,302 @@ function filterResults() {
       (g.year && String(g.year).includes(q))
     );
     renderResults(filtered);
+  }
+}
+
+// ─── EXCLUSIONS (results actions) ─────────────────────
+function fileExcludeBtnHtml(file) {
+  if (!file.path) return '';
+  return `<button class="file-exclude-btn" data-path="${escAttr(file.path)}"
+    onclick="excludeFile(this, event)" title="${escAttr(t('exclude_file_title'))}">⊘ ${escHtml(t('exclude_file'))}</button>`;
+}
+
+function groupExcludeBtnHtml(group) {
+  return `<button class="group-select-all group-exclude" data-key="${escAttr(group.key)}"
+    onclick="excludeGroup(this, event)" title="${escAttr(t('exclude_group_title'))}">⊘ ${escHtml(t('exclude_group'))}</button>`;
+}
+
+// Calls fn(group, label) for every duplicate group in the current results.
+function forEachResultGroup(fn) {
+  if (resultsMediaType === 'series') {
+    for (const series of allDuplicates)
+      for (const season of series.seasons)
+        for (const ep of season.episodes)
+          fn(ep, episodeExclusionLabel(series, season, ep));
+  } else {
+    for (const g of allDuplicates) fn(g, g.name + (g.year ? ' (' + g.year + ')' : ''));
+  }
+}
+
+function episodeExclusionLabel(series, season, ep) {
+  const pad = n => n != null ? String(n).padStart(2, '0') : '??';
+  return `${series.series_name} S${pad(season.season_number)}E${pad(ep.episode)} — ${ep.name}`;
+}
+
+function findResultGroup(pred) {
+  let found = null;
+  forEachResultGroup((g, label) => { if (!found && pred(g)) found = { group: g, label }; });
+  return found;
+}
+
+// Drops a group (by key) and/or files matching `dropFile` from the in-memory
+// results, then re-renders. Groups left with fewer than 2 files disappear.
+function removeFromResults(groupKey, dropFile) {
+  const keep = g => {
+    if (groupKey && g.key === groupKey) return false;
+    if (dropFile) g.files = g.files.filter(f => !dropFile(f));
+    return g.files.length >= 2;
+  };
+  if (resultsMediaType === 'series') {
+    allDuplicates = allDuplicates.filter(series => {
+      series.seasons = series.seasons.filter(season => {
+        season.episodes = season.episodes.filter(keep);
+        return season.episodes.length > 0;
+      });
+      return series.seasons.length > 0;
+    });
+  } else {
+    allDuplicates = allDuplicates.filter(keep);
+  }
+
+  // Forget selections for files no longer shown
+  const shown = new Set();
+  forEachResultGroup(g => g.files.forEach(f => shown.add(f.path)));
+  for (const p of [...selectedPaths]) {
+    if (!shown.has(p)) { selectedPaths.delete(p); selectedItemIds.delete(p); }
+  }
+
+  rerenderResultsKeepingOpen();
+  updateResultStats();
+  updateSelectionUI();
+}
+
+function rerenderResultsKeepingOpen() {
+  const openKeys = new Set(
+    [...document.querySelectorAll('.group-body.open[data-open-key]')].map(b => b.dataset.openKey)
+  );
+  filterResults();
+  document.querySelectorAll('.group-body[data-open-key]').forEach(body => {
+    if (!openKeys.has(body.dataset.openKey)) return;
+    body.classList.add('open');
+    body.previousElementSibling?.classList.add('open');
+  });
+}
+
+function updateResultStats() {
+  let groups = 0, files = 0;
+  forEachResultGroup(g => { groups++; files += g.files.length; });
+  document.getElementById('stat-groups').textContent = groups;
+  document.getElementById('stat-files').textContent = files;
+  document.getElementById('stat-excluded').textContent = exclusionsApplied;
+}
+
+async function excludeGroup(btn, e) {
+  e.stopPropagation();
+  const key = btn.dataset.key;
+  const found = findResultGroup(g => g.key === key);
+  if (!found) return;
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/exclusions/group', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        media_type: resultsMediaType,
+        key,
+        label: found.label,
+        paths: found.group.files.map(f => f.path).filter(Boolean),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || res.status);
+    exclusionsApplied++;
+    removeFromResults(key, null);
+    toast(t('excluded_group_toast'), 'success');
+  } catch (err) {
+    btn.disabled = false;
+    toast(t('error_exclusion') + err.message, 'error');
+  }
+}
+
+async function excludeFile(btn, e) {
+  e.stopPropagation();
+  const path = btn.dataset.path;
+  const found = findResultGroup(g => g.files.some(f => f.path === path));
+  if (!found) return;
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/exclusions/files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ media_type: resultsMediaType, files: [{ path, label: found.label }] }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || res.status);
+    exclusionsApplied++;
+    removeFromResults(null, f => f.path === path);
+    toast(t('excluded_file_toast'), 'success');
+  } catch (err) {
+    btn.disabled = false;
+    toast(t('error_exclusion') + err.message, 'error');
+  }
+}
+
+// Called by setLanguage() so text rendered from JS picks up the new language.
+function onLanguageChanged() {
+  if (document.getElementById('section-results').style.display !== 'none') {
+    rerenderResultsKeepingOpen();
+  }
+  if (document.getElementById('exclusions-modal').classList.contains('open')) {
+    renderExclusions();
+  }
+}
+
+// ─── EXCLUSIONS MODAL ─────────────────────────────────
+async function loadExclusions() {
+  const res = await fetch('/api/exclusions');
+  if (!res.ok) throw new Error(res.status);
+  exclusions = await res.json();
+}
+
+async function openExclusionsModal() {
+  try {
+    await loadExclusions();
+  } catch (_) {
+    toast(t('error_load_exclusions'), 'error');
+    return;
+  }
+  document.getElementById('inp-excl-search').value = '';
+  switchExclusionsTab(currentExclusionsTab);
+  document.getElementById('exclusions-modal').classList.add('open');
+  document.getElementById('inp-excl-search').focus();
+}
+
+function closeExclusionsModal() {
+  document.getElementById('exclusions-modal').classList.remove('open');
+}
+
+function onExclusionsModalOverlayClick(e) {
+  if (e.target === e.currentTarget) closeExclusionsModal();
+}
+
+function switchExclusionsTab(tab) {
+  currentExclusionsTab = tab;
+  document.getElementById('excl-tab-btn-movies').classList.toggle('active', tab === 'movies');
+  document.getElementById('excl-tab-btn-series').classList.toggle('active', tab === 'series');
+  renderExclusions();
+}
+
+// Lowercase and strip diacritics so "amelie" finds "Amélie" and "zolw" finds "Żółw".
+function normalizeSearch(s) {
+  return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ł/g, 'l').replace(/Ł/g, 'L').toLowerCase();
+}
+
+// Every word of the query must appear in the entry's label or one of its paths.
+function exclusionMatches(entry, words) {
+  if (!words.length) return true;
+  const hay = normalizeSearch([entry.label, entry.path, ...(entry.paths || [])].join('\n'));
+  return words.every(w => hay.includes(w));
+}
+
+// Entries of the current tab that match the search box.
+function shownExclusions() {
+  const tab = currentExclusionsTab;
+  const words = normalizeSearch(document.getElementById('inp-excl-search').value).split(/\s+/).filter(Boolean);
+  const byLabel = (a, b) => (a.label || '').localeCompare(b.label || '');
+  const allGroups = exclusions.groups.filter(g => g.media_type === tab);
+  const allFiles  = exclusions.files.filter(f => f.media_type === tab);
+  return {
+    searching: words.length > 0,
+    allGroups, allFiles,
+    groups: allGroups.filter(g => exclusionMatches(g, words)).sort(byLabel),
+    files:  allFiles.filter(f => exclusionMatches(f, words)).sort(byLabel),
+  };
+}
+
+function renderExclusions() {
+  for (const type of ['movies', 'series']) {
+    const n = exclusions.groups.filter(g => g.media_type === type).length +
+              exclusions.files.filter(f => f.media_type === type).length;
+    document.getElementById(`excl-tab-count-${type}`).textContent = n ? `(${n})` : '';
+  }
+
+  const { searching, allGroups, allFiles, groups, files } = shownExclusions();
+  const emptyHtml = all => `<div class="excl-empty">${escHtml(t(all.length ? 'exclusions_no_match' : 'exclusions_empty'))}</div>`;
+  const countText = (shown, all) => !all.length ? ''
+    : searching ? '(' + tf('exclusions_count_filtered', {shown: shown.length, total: all.length}) + ')'
+    : `(${all.length})`;
+
+  document.getElementById('excl-groups-count').textContent = countText(groups, allGroups);
+  document.getElementById('excl-files-count').textContent = countText(files, allFiles);
+
+  document.getElementById('excl-groups').innerHTML = groups.length ? groups.map(g => exclusionItemHtml(
+    g.id, g.label, g.paths || [], g.added, `${(g.paths || []).length} ${t('files_label')}`
+  )).join('') : emptyHtml(allGroups);
+
+  document.getElementById('excl-files').innerHTML = files.length ? files.map(f => exclusionItemHtml(
+    f.id, f.label, [f.path], f.added, ''
+  )).join('') : emptyHtml(allFiles);
+
+  const shownCount = groups.length + files.length;
+  const clearBtn = document.getElementById('btn-excl-clear');
+  clearBtn.textContent = searching ? tf('exclusions_remove_shown', {count: shownCount}) : t('exclusions_clear_all');
+  clearBtn.disabled = shownCount === 0;
+}
+
+function exclusionItemHtml(id, label, paths, added, badge) {
+  const date = added ? new Date(added).toLocaleDateString(currentLang) : '';
+  return `
+    <div class="excl-item">
+      <div class="excl-info">
+        <div class="excl-label">
+          ${escHtml(label)}
+          ${badge ? `<span class="badge">${escHtml(badge)}</span>` : ''}
+          ${date ? `<span class="excl-date">${escHtml(date)}</span>` : ''}
+        </div>
+        <div class="excl-paths">${paths.map(p => `<div>${escHtml(p)}</div>`).join('')}</div>
+      </div>
+      <button class="btn-icon" data-id="${escAttr(id)}" onclick="removeExclusion(this)" title="${escAttr(t('exclusion_remove_title'))}">✕</button>
+    </div>`;
+}
+
+async function removeExclusion(btn) {
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/api/exclusions/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error((await res.json()).error || res.status);
+    await loadExclusions();
+    renderExclusions();
+    toast(t('exclusion_removed'), 'success');
+  } catch (err) {
+    btn.disabled = false;
+    toast(t('error_exclusion') + err.message, 'error');
+  }
+}
+
+// "Remove All" for the tab, or "Remove Shown" when a search is active.
+async function clearExclusionsTab() {
+  const { searching, groups, files } = shownExclusions();
+  const ids = [...groups, ...files].map(e => e.id);
+  if (!ids.length) return;
+  const question = searching
+    ? tf('exclusions_remove_shown_confirm', {count: ids.length})
+    : t('exclusions_clear_confirm');
+  if (!confirm(question)) return;
+  try {
+    const res = searching
+      ? await fetch('/api/exclusions/remove', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids }),
+        })
+      : await fetch(`/api/exclusions?media_type=${currentExclusionsTab}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error((await res.json()).error || res.status);
+    await loadExclusions();
+    renderExclusions();
+    toast(t('exclusions_cleared'), 'success');
+  } catch (err) {
+    toast(t('error_exclusion') + err.message, 'error');
   }
 }
 
@@ -1401,7 +1745,6 @@ async function confirmDelete() {
   const deleteFiles = document.getElementById('del-files').checked;
   const items = [...selectedItemIds.values()];
   const itemIds = [...new Set(items.map(i => i.item_id).filter(Boolean))];
-  const pathsToRemove = new Set(items.map(i => i.path));
 
   const btn = document.getElementById('btn-confirm-delete');
   btn.disabled = true;
@@ -1421,23 +1764,10 @@ async function confirmDelete() {
       toast(tf('deleted_items', {count: data.deleted.length}), 'success');
     }
 
-    pathsToRemove.forEach(path => {
-      selectedPaths.delete(path);
-      selectedItemIds.delete(path);
-      document.querySelectorAll('.file-checkbox').forEach(cb => {
-        if (cb.dataset.path === path) {
-          const cardId = cb.id.replace('chk-', '');
-          document.getElementById(`card-${cardId}`)?.remove();
-        }
-      });
-    });
-
-    document.querySelectorAll('.dupe-group').forEach(group => {
-      const remaining = group.querySelectorAll('.file-card').length;
-      if (remaining < 2) group.remove();
-    });
-
-    updateSelectionUI();
+    // Deleting an Emby item removes all of its media sources, so drop every
+    // file of each successfully deleted item (failed ones stay listed).
+    const deletedIds = new Set(data.deleted || []);
+    if (deletedIds.size) removeFromResults(null, f => deletedIds.has(f.item_id));
     closeDeleteConfirm();
   } catch (e) {
     toast(t('error_delete') + e.message, 'error');

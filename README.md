@@ -14,6 +14,7 @@ A web application for finding and managing duplicate movies in your Emby media s
 - **Export Paths** - export selected file paths to a `.txt` file for use with your preferred deletion tool
 - **Delete via API** - optionally delete selected items directly through the Emby API
 - **Path Mapping** - configure export path transformations (prefix, suffix, path replacements) for different OS/mount configurations
+- **Exclusions** - mark false positives as "not a duplicate" (a whole group or a single file) so future scans skip them; manage or undo them from the Exclusions modal
 - **Persistent Configuration** - all settings saved to `config.json` and persist across restarts
 - **Dark Theme UI** - modern, responsive single-page application
 
@@ -78,7 +79,7 @@ volumes:
     driver: local
 ```
 
-The `emby_dupes_data` named volume persists your `config.json` (connection settings, scoring config, export config) between container restarts and upgrades.
+The `emby_dupes_data` named volume persists your `config.json` (connection settings, scoring config, export config) and `exclusions.json` (skipped duplicates) between container restarts and upgrades.
 
 ## Environment Variables
 
@@ -86,7 +87,7 @@ The `emby_dupes_data` named volume persists your `config.json` (connection setti
 |--------------|-----------------------|------------------------------------------|
 | `PORT`       | `5000`                | Port the app listens on                  |
 | `DEBUG`      | `false`               | Enable Flask debug mode                  |
-| `DATA_DIR`   | `/app/data`           | Directory for persistent `config.json`   |
+| `DATA_DIR`   | `/app/data`           | Directory for `config.json` and `exclusions.json` |
 | `SECRET_KEY` | *(built-in default)*  | Flask session secret key (change in production) |
 
 ## Configuration
@@ -143,6 +144,7 @@ Configure how file paths are transformed when exporting:
 3. Any group with 2+ files (across separate items or multiple media sources within one item) is flagged as a duplicate
 4. Each file is scored using the configured scoring algorithm
 5. Files within each group are sorted by score (highest first) - the top file is marked as "BEST"
+6. Exclusions are applied: excluded files (matched by path) are ignored, and excluded groups are hidden as long as they contain only the files they had when excluded - if a new copy appears, the group is reported again
 
 ## Tech Stack
 
@@ -154,5 +156,5 @@ Configure how file paths are transformed when exporting:
 
 - The app **reads** from your Emby server by default - deletion requires explicit action via the Delete button
 - Exported `.txt` files contain one file path per line
-- All configuration is stored in a single `data/config.json` file
+- Settings are stored in `data/config.json`; exclusions are stored separately in `data/exclusions.json`
 - The app was tested with Emby 4.9.3.0

@@ -1,6 +1,9 @@
 import fnmatch as fnmod
 import os
 import json
+import threading
+import uuid
+from datetime import datetime, timezone
 import requests
 from flask import Flask, render_template, request, jsonify, send_file
 from io import BytesIO
@@ -10,6 +13,10 @@ app.secret_key = os.environ.get("SECRET_KEY", "emby-dupes-secret-key-change-me")
 
 DATA_DIR = os.environ.get("DATA_DIR", "/app/data" if os.path.exists("/app") else "data")
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
+EXCLUSIONS_FILE = os.path.join(DATA_DIR, "exclusions.json")
+MEDIA_TYPES = ("movies", "series")
+
+_exclusions_lock = threading.Lock()
 
 
 def load_config():
@@ -24,6 +31,61 @@ def save_config(config):
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f)
+
+
+# ─── EXCLUSIONS ──────────────────────────────────────
+# Stored separately from config.json: it's user data that grows over time,
+# not settings, and keeping it apart means it can be backed up / reset
+# independently and never touches the API key.
+#
+# Group exclusion: the duplicate group (by group key) is hidden as long as all
+# of its files were part of the group when it was excluded. If a new file shows
+# up in that group, the group is reported again.
+# File exclusion: the file (by path) is ignored entirely when grouping.
+
+def load_exclusions():
+    try:
+        with open(EXCLUSIONS_FILE, "r") as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+    data.setdefault("groups", [])
+    data.setdefault("files", [])
+    return data
+
+
+def save_exclusions(data):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp = EXCLUSIONS_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, EXCLUSIONS_FILE)
+
+
+def get_active_exclusions(media_type):
+    data = load_exclusions()
+    groups = {
+        g["key"]: set(g.get("paths", []))
+        for g in data["groups"]
+        if g.get("media_type") == media_type
+    }
+    files = {f["path"] for f in data["files"] if f.get("media_type") == media_type}
+    return groups, files
+
+
+def group_key_str(key):
+    return f"{key[0]}:{key[1]}"
+
+
+def is_group_excluded(group, excluded_groups):
+    snapshot = excluded_groups.get(group["key"])
+    if snapshot is None:
+        return False
+    return all(f["path"] in snapshot for f in group["files"])
+
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def format_size(size_bytes):
@@ -316,6 +378,8 @@ def get_episode_key(item):
 
 def find_duplicates(movies):
     scoring_cfg = get_scoring_config()
+    excluded_groups, excluded_files = get_active_exclusions("movies")
+    excluded_files_hit = set()
 
     groups = {}
     for item in movies:
@@ -325,27 +389,39 @@ def find_duplicates(movies):
         key = get_movie_key(item)
         if key not in groups:
             groups[key] = {
+                "key": group_key_str(key),
                 "name": item.get("Name", "Unknown"),
                 "year": item.get("ProductionYear"),
                 "files": [],
             }
         for source in sources:
+            path = source.get("Path", "")
+            if path and path in excluded_files:
+                excluded_files_hit.add(path)
+                continue
             entry = parse_movie_entry(item, source)
             entry["score"] = get_score(entry, scoring_cfg)
             groups[key]["files"].append(entry)
 
     duplicates = []
+    excluded_groups_hit = 0
     for group in groups.values():
         if len(group["files"]) >= 2:
+            if is_group_excluded(group, excluded_groups):
+                excluded_groups_hit += 1
+                continue
             group["files"].sort(key=lambda x: x.get("score", 0), reverse=True)
             duplicates.append(group)
 
     duplicates.sort(key=lambda x: x["name"].lower())
-    return duplicates, scoring_cfg.get("auto_select_losers", False)
+    exclusions_applied = excluded_groups_hit + len(excluded_files_hit)
+    return duplicates, scoring_cfg.get("auto_select_losers", False), exclusions_applied
 
 
 def find_series_duplicates(episodes):
     scoring_cfg = get_scoring_config()
+    excluded_groups, excluded_files = get_active_exclusions("series")
+    excluded_files_hit = set()
 
     # Group by episode identity
     ep_groups = {}
@@ -356,6 +432,7 @@ def find_series_duplicates(episodes):
         key = get_episode_key(item)
         if key not in ep_groups:
             ep_groups[key] = {
+                "key": group_key_str(key),
                 "series_name": item.get("SeriesName") or "Unknown",
                 "season": item.get("ParentIndexNumber"),
                 "episode": item.get("IndexNumber"),
@@ -363,12 +440,24 @@ def find_series_duplicates(episodes):
                 "files": [],
             }
         for source in sources:
+            path = source.get("Path", "")
+            if path and path in excluded_files:
+                excluded_files_hit.add(path)
+                continue
             entry = parse_movie_entry(item, source)
             entry["score"] = get_score(entry, scoring_cfg)
             ep_groups[key]["files"].append(entry)
 
-    # Only keep episodes with 2+ files
-    dup_episodes = {k: v for k, v in ep_groups.items() if len(v["files"]) >= 2}
+    # Only keep episodes with 2+ files that aren't excluded
+    dup_episodes = {}
+    excluded_groups_hit = 0
+    for k, v in ep_groups.items():
+        if len(v["files"]) < 2:
+            continue
+        if is_group_excluded(v, excluded_groups):
+            excluded_groups_hit += 1
+            continue
+        dup_episodes[k] = v
     for ep in dup_episodes.values():
         ep["files"].sort(key=lambda x: x.get("score", 0), reverse=True)
 
@@ -392,7 +481,8 @@ def find_series_duplicates(episodes):
             seasons.append({"season_number": snum, "episodes": eps})
         result.append({"series_name": sname, "seasons": seasons})
 
-    return result, scoring_cfg.get("auto_select_losers", False)
+    exclusions_applied = excluded_groups_hit + len(excluded_files_hit)
+    return result, scoring_cfg.get("auto_select_losers", False), exclusions_applied
 
 
 @app.route("/")
@@ -465,7 +555,7 @@ def scan():
     try:
         if media_type == "series":
             episodes = fetch_all_items(config["host"], config.get("port", "8096"), config["api_key"], "Episode")
-            duplicates, auto_select_losers = find_series_duplicates(episodes)
+            duplicates, auto_select_losers, exclusions_applied = find_series_duplicates(episodes)
             total_episodes = len(episodes)
             dup_episode_count = sum(
                 len(ep["files"])
@@ -485,10 +575,11 @@ def scan():
                 "duplicate_groups": dup_group_count,
                 "duplicate_files": dup_episode_count,
                 "auto_select_losers": auto_select_losers,
+                "exclusions_applied": exclusions_applied,
             })
         else:
             movies = fetch_all_items(config["host"], config.get("port", "8096"), config["api_key"], "Movie")
-            duplicates, auto_select_losers = find_duplicates(movies)
+            duplicates, auto_select_losers, exclusions_applied = find_duplicates(movies)
             return jsonify({
                 "media_type": "movies",
                 "duplicates": duplicates,
@@ -496,6 +587,7 @@ def scan():
                 "duplicate_groups": len(duplicates),
                 "duplicate_files": sum(len(g["files"]) for g in duplicates),
                 "auto_select_losers": auto_select_losers,
+                "exclusions_applied": exclusions_applied,
             })
     except requests.exceptions.ConnectionError:
         return jsonify({"error": "Cannot connect to Emby server."}), 400
@@ -636,6 +728,117 @@ def set_scoring_config_api():
         "auto_select_losers": bool(data.get("auto_select_losers", False)),
     }
     save_config(cfg)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/exclusions", methods=["GET"])
+def get_exclusions():
+    return jsonify(load_exclusions())
+
+
+@app.route("/api/exclusions/group", methods=["POST"])
+def add_group_exclusion():
+    data = request.json or {}
+    media_type = data.get("media_type")
+    key = (data.get("key") or "").strip()
+    paths = [p for p in data.get("paths", []) if isinstance(p, str) and p]
+    if media_type not in MEDIA_TYPES:
+        return jsonify({"error": "Invalid media type"}), 400
+    if not key or not paths:
+        return jsonify({"error": "Group key and paths are required"}), 400
+
+    entry = {
+        "id": uuid.uuid4().hex,
+        "media_type": media_type,
+        "key": key,
+        "label": data.get("label") or key,
+        "paths": sorted(set(paths)),
+        "added": now_iso(),
+    }
+    with _exclusions_lock:
+        excl = load_exclusions()
+        # Re-excluding the same group replaces its file snapshot
+        excl["groups"] = [
+            g for g in excl["groups"]
+            if not (g.get("media_type") == media_type and g.get("key") == key)
+        ]
+        excl["groups"].append(entry)
+        save_exclusions(excl)
+    return jsonify({"ok": True, "entry": entry})
+
+
+@app.route("/api/exclusions/files", methods=["POST"])
+def add_file_exclusions():
+    data = request.json or {}
+    media_type = data.get("media_type")
+    files = data.get("files", [])
+    if media_type not in MEDIA_TYPES:
+        return jsonify({"error": "Invalid media type"}), 400
+
+    added = []
+    with _exclusions_lock:
+        excl = load_exclusions()
+        existing = {f["path"] for f in excl["files"] if f.get("media_type") == media_type}
+        for f in files:
+            path = (f.get("path") or "") if isinstance(f, dict) else ""
+            if not path or path in existing:
+                continue
+            entry = {
+                "id": uuid.uuid4().hex,
+                "media_type": media_type,
+                "path": path,
+                "label": f.get("label") or os.path.basename(path),
+                "added": now_iso(),
+            }
+            excl["files"].append(entry)
+            existing.add(path)
+            added.append(entry)
+        if added:
+            save_exclusions(excl)
+    if not added and not files:
+        return jsonify({"error": "No files given"}), 400
+    return jsonify({"ok": True, "added": added})
+
+
+@app.route("/api/exclusions/<entry_id>", methods=["DELETE"])
+def remove_exclusion(entry_id):
+    with _exclusions_lock:
+        excl = load_exclusions()
+        before = len(excl["groups"]) + len(excl["files"])
+        excl["groups"] = [g for g in excl["groups"] if g.get("id") != entry_id]
+        excl["files"] = [f for f in excl["files"] if f.get("id") != entry_id]
+        if len(excl["groups"]) + len(excl["files"]) == before:
+            return jsonify({"error": "Exclusion not found"}), 404
+        save_exclusions(excl)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/exclusions/remove", methods=["POST"])
+def remove_exclusions_bulk():
+    ids = set((request.json or {}).get("ids", []))
+    if not ids:
+        return jsonify({"error": "No ids given"}), 400
+    with _exclusions_lock:
+        excl = load_exclusions()
+        before = len(excl["groups"]) + len(excl["files"])
+        excl["groups"] = [g for g in excl["groups"] if g.get("id") not in ids]
+        excl["files"] = [f for f in excl["files"] if f.get("id") not in ids]
+        removed = before - len(excl["groups"]) - len(excl["files"])
+        if removed:
+            save_exclusions(excl)
+    return jsonify({"ok": True, "removed": removed})
+
+
+@app.route("/api/exclusions", methods=["DELETE"])
+def clear_exclusions():
+    media_type = request.args.get("media_type")
+    if media_type not in MEDIA_TYPES:
+        return jsonify({"error": "Invalid media type"}), 400
+    with _exclusions_lock:
+        excl = load_exclusions()
+        excl["groups"] = [g for g in excl["groups"] if g.get("media_type") != media_type]
+        excl["files"] = [f for f in excl["files"] if f.get("media_type") != media_type]
+        save_exclusions(excl)
     return jsonify({"ok": True})
 
 
